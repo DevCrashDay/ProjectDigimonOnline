@@ -1,4 +1,5 @@
 # Digimon Netplay (online versus for Project Digimon)
+<img width="1920" height="750" alt="Digimon2" src="https://github.com/user-attachments/assets/428d3c7a-5c81-4a17-8c04-b1af4fe50051" />
 
 A client mod plus a relay server that let 2 to 4 people play Project Digimon versus battles over the internet.
 
