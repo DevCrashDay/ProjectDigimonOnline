@@ -1,6 +1,9 @@
 # Digimon Netplay (online versus for Project Digimon)
 
-A client mod plus a relay server that let 2 to 4 people play Project Digimon's (The Original Game Thread and Files can be found here: https://withthewill.net/threads/digimon-rumble-arena-fangame-read-the-first-post-before-posting.21232/) versus battles over the internet.
+A client mod plus a relay server that let 2 to 4 people play Project Digimon versus battles over the internet.
+
+The Original Game Thread and Files can be found here: https://withthewill.net/threads/digimon-rumble-arena-fangame-read-the-first-post-before-posting.21232/
+All credits for this amazing fan game goes to Draco74 https://withthewill.net/members/draco74.11579/
 
 ## How it works
 
