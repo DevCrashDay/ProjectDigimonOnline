@@ -29,7 +29,6 @@ namespace DigimonNetplay
         private string _charFilter = "";
 
         private bool _show;
-        private Rect _window = new Rect(20, 20, 430, 520);
         private Vector2 _scroll;
         private string _notice;
         private float _noticeUntil;
@@ -39,6 +38,18 @@ namespace DigimonNetplay
         private bool _gameInputDisabled;
 
         private bool IsHost => _inRoom && _mySlot == _hostSlot;
+
+        public bool ScreenOpen => _show;
+        public bool InRoom => _inRoom;
+
+        /// <summary>Opens the online screen (from the main menu's ONLINE entry or after an online match).</summary>
+        public void OpenScreen() => _show = true;
+
+        private void CloseScreen()
+        {
+            _show = false;
+            GUIUtility.keyboardControl = 0;
+        }
 
         private void Awake()
         {
@@ -273,7 +284,10 @@ namespace DigimonNetplay
         private void Update()
         {
             var kb = Keyboard.current;
-            if (kb != null && kb[_toggleKey].wasPressedThisFrame) _show = !_show;
+            if (kb != null && kb[_toggleKey].wasPressedThisFrame) { if (_show) CloseScreen(); else OpenScreen(); }
+            else if (_show && MatchSession.Current == null &&
+                     ((kb != null && kb.escapeKey.wasPressedThisFrame) || (Gamepad.current != null && Gamepad.current.buttonEast.wasPressedThisFrame)))
+                CloseScreen();
             if (_client != null && Time.unscaledTime >= _nextPing)
             {
                 _client.Ping();
@@ -313,32 +327,52 @@ namespace DigimonNetplay
 
         private void OnGUI()
         {
+            // Everything is laid out on a 720-pixel-high canvas and scaled to the window, like the game's menus.
+            float scale = Screen.height / OnlineSkin.CanvasHeight;
+            float width = Screen.width / scale;
+            GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(scale, scale, 1f));
+            GUI.skin = OnlineSkin.Get();
+
             var session = MatchSession.Current;
-            if (session != null) DrawHud(session);
-            if (_notice != null && Time.unscaledTime < _noticeUntil)
-                GUI.Box(new Rect(Screen.width / 2 - 260, 10, 520, 28), _notice);
-            if (!_show) return;
-            _window = GUILayout.Window(0x4E7, _window, DrawWindow, "Online Versus  (" + _toggleKey + " to hide)");
-        }
+            if (session != null) DrawHud(session, width);
+            if (!_show)
+            {
+                DrawNotice(width);
+                return;
+            }
 
-        private void DrawHud(MatchSession s)
-        {
-            var c = s.Core;
-            string text = s.Status + "   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms   delay " + c.Delay + "f";
-            if (c.DesyncCount > 0) text += "   desyncs fixed " + c.DesyncCount;
-            if (s.StallMs > 50) text += "   waiting " + s.StallMs.ToString("0") + " ms";
-            GUI.Label(new Rect(10, Screen.height - 26, 700, 24), text);
-        }
-
-        private void DrawWindow(int id)
-        {
+            if (session == null) GUI.DrawTexture(new Rect(0, 0, width, OnlineSkin.CanvasHeight), OnlineSkin.Dim);
+            var panel = new Rect(width / 2 - 400, 50, 800, OnlineSkin.CanvasHeight - 100);
+            GUI.Box(panel, GUIContent.none, OnlineSkin.Panel);
+            GUILayout.BeginArea(new Rect(panel.x + 28, panel.y + 18, panel.width - 56, panel.height - 36));
+            GUILayout.Label("ONLINE VERSUS", OnlineSkin.Title);
             _scroll = GUILayout.BeginScrollView(_scroll);
             if (!GameBridge.GameReady) GUILayout.Label("Waiting for the game to finish loading...");
             else if (_client == null) DrawConnect();
             else if (!_inRoom) DrawRoomChoice();
             else DrawLobby();
             GUILayout.EndScrollView();
-            GUI.DragWindow();
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(session == null ? "Esc / B: back      " + _toggleKey + ": open or close anywhere" : _toggleKey + ": hide", OnlineSkin.Hint);
+            if (GUILayout.Button("Back", GUILayout.Width(140))) CloseScreen();
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+            DrawNotice(width);
+        }
+
+        private void DrawNotice(float width)
+        {
+            if (_notice != null && Time.unscaledTime < _noticeUntil)
+                GUI.Box(new Rect(width / 2 - 360, 8, 720, 34), _notice, OnlineSkin.Notice);
+        }
+
+        private void DrawHud(MatchSession s, float width)
+        {
+            var c = s.Core;
+            string text = s.Status + "   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms   delay " + c.Delay + "f";
+            if (c.DesyncCount > 0) text += "   desyncs fixed " + c.DesyncCount;
+            if (s.StallMs > 50) text += "   waiting " + s.StallMs.ToString("0") + " ms";
+            GUI.Label(new Rect(10, OnlineSkin.CanvasHeight - 30, width - 20, 26), text, OnlineSkin.Hud);
         }
 
         private void DrawConnect()
@@ -347,7 +381,7 @@ namespace DigimonNetplay
             _nameField = GUILayout.TextField(_nameField, 20);
             GUILayout.Label("Server address and port");
             GUILayout.BeginHorizontal();
-            _hostField = GUILayout.TextField(_hostField, GUILayout.Width(260));
+            _hostField = GUILayout.TextField(_hostField, GUILayout.Width(420));
             _portField = GUILayout.TextField(_portField, 6);
             GUILayout.EndHorizontal();
             if (GUILayout.Button("Connect to server")) Connect(false);
@@ -366,7 +400,7 @@ namespace DigimonNetplay
             GUILayout.Space(6);
             GUILayout.Label("Join with a room code");
             GUILayout.BeginHorizontal();
-            _codeField = GUILayout.TextField(_codeField.ToUpperInvariant(), 5, GUILayout.Width(120));
+            _codeField = GUILayout.TextField(_codeField.ToUpperInvariant(), 5, GUILayout.Width(160));
             if (GUILayout.Button("Join") && _codeField.Length > 0) _client.JoinRoom(_codeField);
             GUILayout.EndHorizontal();
             GUILayout.Space(10);
@@ -402,12 +436,12 @@ namespace DigimonNetplay
                 if (GUILayout.Button(">")) { _stageIdx = (_stageIdx + 1) % _stages.Count; _lobby.Stage = _stages[_stageIdx]; BroadcastLobby(); }
                 GUILayout.EndHorizontal();
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Rounds to win: " + _lobby.Rounds, GUILayout.Width(140));
+                GUILayout.Label("Rounds to win: " + _lobby.Rounds, GUILayout.Width(260));
                 if (GUILayout.Button("-")) { _lobby.Rounds = Mathf.Max(1, _lobby.Rounds - 1); BroadcastLobby(); }
                 if (GUILayout.Button("+")) { _lobby.Rounds = Mathf.Min(4, _lobby.Rounds + 1); BroadcastLobby(); }
                 GUILayout.EndHorizontal();
                 GUILayout.BeginHorizontal();
-                GUILayout.Label("Input delay: " + _lobby.InputDelay + " frames", GUILayout.Width(140));
+                GUILayout.Label("Input delay: " + _lobby.InputDelay + " frames", GUILayout.Width(260));
                 if (GUILayout.Button("-")) { _lobby.InputDelay = Mathf.Max(0, _lobby.InputDelay - 1); BroadcastLobby(); }
                 if (GUILayout.Button("+")) { _lobby.InputDelay = Mathf.Min(12, _lobby.InputDelay + 1); BroadcastLobby(); }
                 GUILayout.EndHorizontal();
@@ -432,7 +466,7 @@ namespace DigimonNetplay
             if (_chars.Count == 0) { GUILayout.Label("No unlocked Digimon found in your save."); return; }
             GUILayout.Label("Your Digimon");
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Search", GUILayout.Width(50));
+            GUILayout.Label("Search", GUILayout.Width(90));
             string filter = GUILayout.TextField(_charFilter, 20);
             GUILayout.EndHorizontal();
             if (filter != _charFilter)
@@ -452,9 +486,9 @@ namespace DigimonNetplay
         {
             bool changed = false;
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("<", GUILayout.Width(30)) && count > 0) { idx = (idx + count - 1) % count; changed = true; }
-            GUILayout.Label(label, GUILayout.Width(300));
-            if (GUILayout.Button(">", GUILayout.Width(30)) && count > 0) { idx = (idx + 1) % count; changed = true; }
+            if (GUILayout.Button("<", GUILayout.Width(50)) && count > 0) { idx = (idx + count - 1) % count; changed = true; }
+            GUILayout.Label(label, GUILayout.Width(420));
+            if (GUILayout.Button(">", GUILayout.Width(50)) && count > 0) { idx = (idx + 1) % count; changed = true; }
             GUILayout.EndHorizontal();
             return changed;
         }

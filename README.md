@@ -21,7 +21,7 @@ Pause is disabled online. Battles use the host's settings (rounds, items, hazard
 
 1. Close the game.
 2. Download `DigimonNetplay-Client.zip` from the [Releases](../../releases) page and extract it into the game folder, the one containing `ProjectDigimon.exe`. It adds BepInEx 5.4.23.2 (`winhttp.dll`, `doorstop_config.ini`, `BepInEx/`) and `BepInEx/plugins/DigimonNetplay/DigimonNetplay.dll`. It does not change any of the game's own files.
-3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.1.1 loaded`.
+3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.2.0 loaded`, and the main menu has an **ONLINE** entry.
 
 Everyone must use the same game version (1.16) and the same mod version.
 
@@ -36,20 +36,20 @@ Download the server zip for your system from the [Releases](../../releases) page
 
 Players on other networks need TCP port 7777 forwarded to that machine (or the VPS firewall opened). The server only relays messages, so it uses very little CPU or bandwidth.
 
-Alternative without a separate server: the host clicks **Host on this PC** in the mod's window, forwards TCP 7777 on their router, and gives friends their public IP.
+Alternative without a separate server: the host clicks **Host on this PC** on the online screen, forwards TCP 7777 on their router, and gives friends their public IP.
 
 ## Play
 
-1. Go to the main menu and press **F8** to open the Online Versus window.
+1. In the main menu, pick **ONLINE** (under VS COMPUTER). **F8** also opens the online screen from anywhere; **Esc** or **B** goes back.
 2. Enter your name and the server address, then **Connect to server**.
 3. The host clicks **Create 1v1 room** or **Create 4-player room** and shares the room code. Others type it and **Join**.
-4. Everyone picks a Digimon, color and evolution in the window.
+4. Everyone picks a Digimon, color and evolution on the online screen.
 5. The host picks the stage, rounds to win and input delay, then clicks **Start match**. Everyone goes to the VS screen together.
-6. After the battle, everyone is back at the menu and still in the room; the host can start a rematch.
+6. After the battle, everyone is back at the main menu with the online screen open and still in the room; the host can start a rematch.
 
 The bottom-left HUD shows ping, input delay, how long the game waited for someone, and how many desyncs were corrected.
 
-**Input delay:** 2 to 3 frames is fine for players in the same region, 4 to 6 for long distances. If the game keeps pausing briefly, the host should raise it. The window suggests a value from your ping.
+**Input delay:** 2 to 3 frames is fine for players in the same region, 4 to 6 for long distances. If the game keeps pausing briefly, the host should raise it. The online screen suggests a value from your ping.
 
 ## Settings
 
@@ -61,7 +61,7 @@ The bottom-left HUD shows ping, input delay, how long the game waited for someon
 | PlayerName | Tamer | Name shown to others |
 | LocalControls | K1,G1 | Which of the game's control sets drive your fighter online (K1/K2 keyboard layouts, G1..G6 gamepads), merged. Uses your rebinds from the game's options. |
 | DefaultInputDelay | 3 | Delay a new room starts with |
-| ToggleKey | F8 | Opens/closes the window |
+| ToggleKey | F8 | Opens/closes the online screen from anywhere |
 | StallTimeoutSeconds | 15 | How long to wait for a silent player before ending the match |
 
 ## Known limits
@@ -69,6 +69,7 @@ The bottom-left HUD shows ping, input delay, how long the game waited for someon
 - Early version: 1v1 has been played successfully in the real game; 3 to 4 player rooms are less tested. Send `BepInEx/LogOutput.log` from each player when something goes wrong.
 - Lockstep is only as deterministic as the game. Rare moves that depend on things outside the synced state may still drift. The desync check corrects positions and life/energy bars, but not animations or projectiles.
 - Supported modes: 1v1 versus (2 players) and battle royale free-for-all (3 to 4 players). Team battles, arcade, story and special battles stay offline.
+- The online screen is used with the mouse (Esc or B goes back); the main menu entry itself works with keyboard and gamepad.
 - No rollback. A bad connection shows up as brief pauses, not teleports.
 - A player who closes the game or loses connection ends the match for everyone (back to the main menu).
 
@@ -93,7 +94,7 @@ dotnet run --project tests/HookCheck -c Release -- "C:\Games\ProjectDIGIMON\Proj
 Layout:
 
 - `src/Shared`: wire protocol, relay server, relay client, lockstep core (no Unity dependency; used by mod, server and tests)
-- `src/Plugin`: BepInEx plugin (lobby window, match setup, frame gate, Harmony patches)
+- `src/Plugin`: BepInEx plugin (ONLINE main menu entry, online screen, match setup, frame gate, Harmony patches)
 - `src/Server`: standalone relay server
 - `tests/NetcodeTests`: end-to-end netcode tests
 - `tests/HookCheck`: verifies the game DLL still has everything the mod patches

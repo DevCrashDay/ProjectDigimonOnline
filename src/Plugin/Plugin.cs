@@ -11,7 +11,7 @@ namespace DigimonNetplay
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "community.projectdigimon.netplay";
-        public const string Version = "0.1.1";
+        public const string Version = "0.2.0";
 
         internal static ManualLogSource Log;
         internal static ConfigEntry<string> ServerHost;
@@ -42,7 +42,7 @@ namespace DigimonNetplay
             go.hideFlags = HideFlags.HideAndDontSave;
             go.AddComponent<NetplayManager>();
             FrameGate.Install();
-            Log.LogInfo("Digimon Netplay " + Version + " loaded. Press " + ToggleKey.Value + " in the main menu to play online.");
+            Log.LogInfo("Digimon Netplay " + Version + " loaded. Pick ONLINE in the main menu (or press " + ToggleKey.Value + ") to play online.");
         }
     }
 }
