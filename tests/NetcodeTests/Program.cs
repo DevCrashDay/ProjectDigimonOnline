@@ -672,7 +672,7 @@ internal static class Program
         m = Match();
         m[0].SetInMatch(true, 222);
         Thread.Sleep(50);
-        int before = server.Ratings.Top(10).First(x => x.Name.StartsWith(m[1] == a ? "Alice" : "Bob")).Rating;
+        int before = server.Ratings.Get(RatingStore.KeyOf(m[1] == a ? "token-alice-0123456789" : "token-bob-0123456789ab"), null).Rating;
         m[0].LeaveRoom();
         var forfeit = WaitFor<EvRatingChanged>(m[1]);
         Check(forfeit.Result == 1 && forfeit.NewRating > before, "leaving mid-match did not count as a loss");
@@ -683,11 +683,35 @@ internal static class Program
         m = Match();
         m[0].SetInMatch(true, 333);
         Thread.Sleep(50);
-        var snapshot = string.Join(",", server.Ratings.Top(10).Select(x => x.Rating));
+        string Snapshot() => server.Ratings.Get(RatingStore.KeyOf("token-alice-0123456789"), null).Rating + "," + server.Ratings.Get(RatingStore.KeyOf("token-bob-0123456789ab"), null).Rating;
+        var snapshot = Snapshot();
         m[0].ReportResult(333, 0);
         m[1].ReportResult(333, 1);
         Check(WaitFor<EvError>(m[0]).Text.Contains("different results"), "dispute not reported");
-        Check(string.Join(",", server.Ratings.Top(10).Select(x => x.Rating)) == snapshot, "disputed game changed ratings");
+        Check(Snapshot() == snapshot, "disputed game changed ratings");
+        m[0].LeaveRoom(); m[1].LeaveRoom();
+
+        // 3b. Only DailyPairLimit (3) games a day against the same opponent are rated.
+        Thread.Sleep(50);
+        m = Match();
+        m[0].SetInMatch(true, 444);
+        Thread.Sleep(50);
+        m[0].ReportResult(444, 1);
+        m[1].ReportResult(444, 1);
+        WaitFor<EvRatingChanged>(m[0]);
+        m[0].LeaveRoom(); m[1].LeaveRoom();
+        Thread.Sleep(50);
+        var alice = server.Ratings.Get(RatingStore.KeyOf("token-alice-0123456789"), null);
+        var bob = server.Ratings.Get(RatingStore.KeyOf("token-bob-0123456789ab"), null);
+        Check(server.Ratings.GamesToday(alice, bob) == 3, "pair count wrong: " + server.Ratings.GamesToday(alice, bob));
+        int aliceBefore = alice.Rating, aliceGames = alice.Games;
+        m = Match();
+        m[0].SetInMatch(true, 555);
+        Thread.Sleep(50);
+        m[0].ReportResult(555, 0);
+        m[1].ReportResult(555, 0);
+        Check(WaitFor<EvError>(m[0]).Text.Contains("Not rated"), "fourth game of the day was rated");
+        Check(alice.Rating == aliceBefore && alice.Games == aliceGames, "fourth game changed the record");
         m[0].LeaveRoom(); m[1].LeaveRoom();
 
         // 4. Far-apart ratings only meet once the search has widened.
@@ -706,6 +730,12 @@ internal static class Program
         server.QueueWidenPerSecond = 25;
         a.LeaveRoom(); c.LeaveRoom();
 
+        // Nobody is listed before MinGames (5) ranked games.
+        a.GetLeaderboard();
+        Check(WaitFor<EvLeaderboard>(a).Rows.Length == 0, "players listed before 5 games");
+        Check(WaitFor<EvAccount>(a).Rank == 0, "rank given before 5 games");
+        server.Ratings.MinGames = 3;
+
         // Leaderboard in the game and on the web.
         a.GetLeaderboard();
         var lb = WaitFor<EvLeaderboard>(a);
@@ -720,6 +750,8 @@ internal static class Program
         }
         // Ratings survive a restart.
         var reloaded = new RatingStore(System.IO.Path.Combine(dataDir, "ratings.tsv"));
+        reloaded.MinGames = 3;
+        Check(reloaded.GamesToday(alice, bob) == 3, "pair counts lost on restart");
         Check(reloaded.Top(10).Select(x => x.Rating).SequenceEqual(server.Ratings.Top(10).Select(x => x.Rating)), "ratings file does not match");
         Console.WriteLine("      final ratings: " + string.Join(", ", server.Ratings.Top(10).Select(x => x.Name.Split('#')[0] + " " + x.Rating + " (" + x.Wins + "-" + x.Losses + ")")));
         a.Dispose(); b.Dispose(); c.Dispose(); watcher.Dispose(); noAccount.Dispose();

@@ -5,7 +5,7 @@ namespace DigimonNetplay.Shared
     /// <summary>Version of the mod and server, shared so the server can tell players about updates.</summary>
     public static class BuildInfo
     {
-        public const string Version = "0.5.0";
+        public const string Version = "0.5.1";
         public const string ReleasesUrl = "https://github.com/DevCrashDay/ProjectDigimonOnline/releases/latest";
 
         /// <summary>True if <paramref name="a"/> is a newer dotted version than <paramref name="b"/> ("0.10.0" &gt; "0.9.2").</summary>

@@ -36,12 +36,19 @@ namespace DigimonNetplay.Server
                     case "--latest-version":
                         if (next != null) { server.LatestVersion = next; i++; }
                         break;
+                    case "--min-games":
+                        if (int.TryParse(next, out int mg)) { server.MinRankedGames = mg; i++; }
+                        break;
+                    case "--daily-pair-limit":
+                        if (int.TryParse(next, out int dp)) { server.DailyPairLimit = dp; i++; }
+                        break;
                     case "--max-rooms":
                         if (int.TryParse(next, out int mr)) { server.MaxRooms = mr; i++; }
                         break;
                     case "--help": case "-h":
                         Console.WriteLine("DigimonNetplayServer [--port 7777] [--name \"My server\"] [--behind-proxy] [--data-dir ./data]");
                         Console.WriteLine("                     [--max-clients 1000] [--max-rooms 300] [--latest-version " + BuildInfo.Version + "] [--download-url URL]");
+                        Console.WriteLine("                     [--min-games 5] [--daily-pair-limit 3]");
                         Console.WriteLine();
                         Console.WriteLine("Lobby and relay server for the Project Digimon online versus mod.");
                         Console.WriteLine("The port accepts the game directly (TCP), WebSocket connections (for Cloudflare or another");
@@ -51,6 +58,8 @@ namespace DigimonNetplay.Server
                         Console.WriteLine("--behind-proxy    trust the proxy's CF-Connecting-IP / X-Forwarded-For header for per-address limits.");
                         Console.WriteLine("--data-dir        where ranked ratings (ratings.tsv) and problem reports (reports/) are kept. Default: ./data");
                         Console.WriteLine("--latest-version  newest mod version; players with an older one are told to update. Default: this server's version.");
+                        Console.WriteLine("--min-games       ranked games a player needs before they appear on the leaderboard. Default: 5");
+                        Console.WriteLine("--daily-pair-limit rated games per day between the same two players; later games are not rated. 0 = no limit. Default: 3");
                         Console.WriteLine("--download-url    where players get the mod. Default: " + BuildInfo.ReleasesUrl);
                         return 0;
                 }

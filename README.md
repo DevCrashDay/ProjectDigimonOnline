@@ -27,7 +27,7 @@ Pause is disabled online. Battles use the host's settings (rounds, items, hazard
 
 1. Close the game.
 2. Download `DigimonNetplay-Client.zip` from the [Releases](../../releases) page and extract it into the game folder, the one containing `ProjectDigimon.exe`. It adds BepInEx 5.4.23.2 (`winhttp.dll`, `doorstop_config.ini`, `BepInEx/`) and `BepInEx/plugins/DigimonNetplay/DigimonNetplay.dll`. It does not change any of the game's own files.
-3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.5.0 loaded`, and the main menu has an **ONLINE** entry.
+3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.5.1 loaded`, and the main menu has an **ONLINE** entry.
 
 Everyone must use the same game version (1.16) and the same mod version.
 
@@ -67,6 +67,8 @@ Server options:
 | `--behind-proxy` | off | Use the player address Cloudflare forwards for the per-address connection limit |
 | `--data-dir` | `./data` | Where ratings and problem reports are kept |
 | `--latest-version` | the server's own version | Players with an older mod see an update notice |
+| `--min-games` | 5 | Ranked games a player needs before they appear on the leaderboard |
+| `--daily-pair-limit` | 3 | Rated games per day between the same two players (0 = no limit) |
 | `--download-url` | this repository's latest release | Where the update notice sends players |
 | `--max-clients`, `--max-rooms` | 1000, 300 | Limits |
 
@@ -100,7 +102,7 @@ The whole online screen works with a gamepad (stick or d-pad to move, **A** to s
 
 **If the connection drops**, the game reconnects by itself (up to 5 tries) and puts you back in your room. If the host leaves, the room stays open and the next player becomes the host. A match that ends early says why and returns everyone to the room.
 
-**Ranked:** 1v1, best of three rounds, no items, no stage hazards, random stage, always through the server. Everyone starts at 1000 Elo; the search starts within 100 rating points and widens the longer you wait. Both games report the winner and the rating only changes when they agree. Leaving a ranked match counts as a loss. The rating belongs to the file `BepInEx/config/DigimonNetplay.account`; keep it (it is not in the shared config file) to keep your rating on a new PC. The **Leaderboard** button shows the top 100 and opens the web version.
+**Ranked:** 1v1, best of three rounds, no items, no stage hazards, random stage, always through the server. Everyone starts at 1000 Elo; the search starts within 100 rating points and widens the longer you wait. Both games report the winner and the rating only changes when they agree. Leaving a ranked match counts as a loss. Players appear on the leaderboard after 5 ranked games, and only the first 3 games per day (UTC) against the same opponent are rated; later ones are played but change nothing. The rating belongs to the file `BepInEx/config/DigimonNetplay.account`; keep it (it is not in the shared config file) to keep your rating on a new PC. The **Leaderboard** button shows the top 100 and opens the web version.
 
 **Watching:** up to 8 spectators per room, including ranked rooms. A spectator who joins during a match watches from the next one. Spectators replay the inputs on their own game, a moment behind the players, and never slow the players down.
 
@@ -134,6 +136,7 @@ The bottom-left HUD shows ping, input delay, how long the game waited for someon
 - Supported modes: 1v1 versus (2 players) and battle royale free-for-all (3 to 4 players). Team battles, arcade, story and special battles stay offline.
 - Text boxes (name, chat, room code) need a keyboard.
 - Ranked results rely on both games agreeing; a modified game could refuse to report a loss, but then the game is simply not counted.
+- Ranked accounts are anonymous key files, so the server cannot tell that two accounts belong to the same person. The 5-game minimum and the 3-games-a-day limit per opponent make farming a rating with a second account slower, not impossible.
 - The lobby over WebSocket is covered by the automated tests, but the encrypted `wss://` connection through Cloudflare has not run inside the game yet. If it fails, the log names the TLS error, and `ws://` (unencrypted) through Cloudflare is the fallback.
 - No rollback. A bad connection shows up as brief pauses, not teleports.
 - A player who closes the game or loses connection ends the current match for everyone; the others go back to the room.

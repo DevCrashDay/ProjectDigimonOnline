@@ -99,6 +99,10 @@ namespace DigimonNetplay.Shared
         public string DownloadUrl = BuildInfo.ReleasesUrl;
         /// <summary>Where ratings and problem reports are kept. Null = ratings in memory only, no reports.</summary>
         public string DataDir;
+        /// <summary>Ranked games before a player is listed on the leaderboard.</summary>
+        public int MinRankedGames = 5;
+        /// <summary>Rated games per day between the same two players; 0 = no limit.</summary>
+        public int DailyPairLimit = 3;
         public int MaxReports = 500;
         /// <summary>How fast the ranked search widens, in rating points per second waited (on top of 100).</summary>
         public int QueueWidenPerSecond = 25;
@@ -112,7 +116,7 @@ namespace DigimonNetplay.Shared
                 Directory.CreateDirectory(DataDir);
                 Directory.CreateDirectory(ReportsDir);
             }
-            _ratings = new RatingStore(DataDir == null ? null : Path.Combine(DataDir, "ratings.tsv")) { Log = m => Log(m) };
+            _ratings = new RatingStore(DataDir == null ? null : Path.Combine(DataDir, "ratings.tsv")) { Log = m => Log(m), MinGames = MinRankedGames, DailyPairLimit = DailyPairLimit };
             _listener = new TcpListener(bind ?? IPAddress.Any, port);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
@@ -279,7 +283,7 @@ namespace DigimonNetplay.Shared
             sb.Append("th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted);font-weight:600;font-size:13px;text-transform:uppercase}");
             sb.Append("td.n{text-align:right;font-variant-numeric:tabular-nums}th.n{text-align:right}tbody tr:first-child td{color:var(--accent);font-weight:700}.empty{padding:24px;text-align:center;color:var(--muted)}");
             sb.Append("</style></head><body><main><h1>Ranked leaderboard</h1><p>").Append(Html(ServerName)).Append(" &middot; Project Digimon online versus &middot; Elo ratings, everyone starts at ")
-              .Append(RatingStore.StartRating).Append("</p><table><thead><tr><th class=\"n\">#</th><th>Player</th><th class=\"n\">Rating</th><th class=\"n\">Wins</th><th class=\"n\">Losses</th></tr></thead><tbody>");
+              .Append(RatingStore.StartRating).Append(". Players are listed after ").Append(_ratings.MinGames).Append(" ranked games.</p><table><thead><tr><th class=\"n\">#</th><th>Player</th><th class=\"n\">Rating</th><th class=\"n\">Wins</th><th class=\"n\">Losses</th></tr></thead><tbody>");
             foreach (var r in rows)
                 sb.Append("<tr><td class=\"n\">").Append(r.Rank).Append("</td><td>").Append(Html(r.Name)).Append("</td><td class=\"n\">").Append(r.Rating)
                   .Append("</td><td class=\"n\">").Append(r.Wins).Append("</td><td class=\"n\">").Append(r.Losses).Append("</td></tr>");
@@ -754,6 +758,9 @@ namespace DigimonNetplay.Shared
             if (room == null) return;
             Seat(b, room, 1);
             Log("Ranked match " + room.Code + ": " + a.Account.Display + " (" + a.Account.Rating + ") vs " + b.Account.Display + " (" + b.Account.Rating + ")");
+            if (!_ratings.CanRate(a.Account, b.Account))
+                foreach (var p in new[] { a, b })
+                    SendError(p, "You already played " + (p == a ? b : a).Account.Display + " " + _ratings.DailyPairLimit + " times today, so this match is not rated.");
         }
 
         private void SendQueueStatus(Client c)
@@ -807,7 +814,12 @@ namespace DigimonNetplay.Shared
             var b = room.MatchPlayers[slots[1]];
             int oldA = a.Account.Rating, oldB = b.Account.Rating;
             double score = winnerSlot == slots[0] ? 1 : winnerSlot == slots[1] ? 0 : 0.5;
-            _ratings.Apply(a.Account, b.Account, score);
+            if (!_ratings.Apply(a.Account, b.Account, score))
+            {
+                Log("Ranked result " + room.Code + " not rated: " + a.Account.Display + " and " + b.Account.Display + " hit today's limit against each other");
+                foreach (var p in new[] { a, b }) SendError(p, "Not rated: you can only play the same opponent " + _ratings.DailyPairLimit + " rated times per day.");
+                return;
+            }
             Log("Ranked result " + room.Code + ": " + a.Account.Display + " " + oldA + "->" + a.Account.Rating + ", " + b.Account.Display + " " + oldB + "->" + b.Account.Rating);
             int resA = score > 0.75 ? 1 : score < 0.25 ? 0 : 2;
             int resB = resA == 2 ? 2 : 1 - resA;

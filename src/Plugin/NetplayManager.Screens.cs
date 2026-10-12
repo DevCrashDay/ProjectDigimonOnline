@@ -172,7 +172,7 @@ namespace DigimonNetplay
         {
             _nav.Back(null);
             DrawUpdateBanner();
-            string me = _accountName != null ? _accountName + (_rank > 0 ? "  (" + _rating + ")" : "") : _nameField;
+            string me = _accountName != null ? _accountName + (_wins + _losses > 0 ? "  (" + _rating + ")" : "") : _nameField;
             GUILayout.Label((_serverName ?? "Lobby server") + "   |   " + _playersOnline + " online   |   ping " + Ping + " ms   |   you are " + me, OnlineSkin.Small);
             if (_searching)
             {
@@ -305,9 +305,9 @@ namespace DigimonNetplay
             }
             GUILayout.Label(_accountName, OnlineSkin.Heading);
             GUILayout.Label("Rating " + _rating + "     " + _wins + " wins, " + _losses + " losses     " +
-                            (_rank > 0 ? "rank #" + _rank : "not on the leaderboard until your first ranked game"));
+                            (_rank > 0 ? "rank #" + _rank : "on the leaderboard after 5 ranked games"));
             GUILayout.Label("1 vs 1 against a player near your rating. Best of three rounds, no items, no stage hazards, random stage, " +
-                            "played through the server. Winning raises your rating, losing lowers it. Leaving a ranked match counts as a loss.", OnlineSkin.Small);
+                            "played through the server. Winning raises your rating, losing lowers it. Leaving a ranked match counts as a loss. Only 3 games per day against the same opponent are rated.", OnlineSkin.Small);
             GUILayout.Space(6);
             if (_searching)
             {
@@ -327,7 +327,7 @@ namespace DigimonNetplay
             _nav.Back(() => _page = Page.Browser);
             GUILayout.Label("LEADERBOARD", OnlineSkin.Heading);
             if (_accountName != null)
-                GUILayout.Label("You: " + _accountName + "   rating " + _rating + "   " + (_rank > 0 ? "rank #" + _rank : "unranked"), OnlineSkin.Small);
+                GUILayout.Label("You: " + _accountName + "   rating " + _rating + "   " + (_rank > 0 ? "rank #" + _rank : "not listed yet (" + (_wins + _losses) + " of 5 ranked games played)"), OnlineSkin.Small);
             GUILayout.BeginHorizontal();
             string web = WebUrl("/leaderboard");
             _nav.Button("Open in the browser", () => OpenUrl(web), web != null, GUILayout.Width(280));
