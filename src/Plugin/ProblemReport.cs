@@ -14,7 +14,8 @@ namespace DigimonNetplay
     internal static class ProblemReport
     {
         private const int LogTail = 512 * 1024;
-        private static readonly Regex Ipv4 = new Regex(@"\b(?!127\.0\.0\.1\b)(?!0\.0\.0\.0\b)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b", RegexOptions.Compiled);
+        // Addresses, but not version numbers ("v1.2.3.4", "BepInEx 5.4.23.2", "Version 1.0.0.0").
+        private static readonly Regex Ipv4 = new Regex(@"(?<![\w.])(?<!BepInEx )(?<!ersion )(?!127\.0\.0\.1\b)(?!0\.0\.0\.0\b)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b", RegexOptions.Compiled);
 
         public static string Build(string description, string server)
         {
@@ -30,7 +31,7 @@ namespace DigimonNetplay
             sb.Append("Direct connections allowed: ").Append(Plugin.AllowP2P.Value).Append(", controls: ").Append(Plugin.LocalControls.Value)
               .Append(", stall timeout: ").Append(Plugin.StallTimeoutSeconds.Value).Append(" s\n");
             sb.Append("Plugins: ");
-            foreach (var p in BepInEx.Bootstrap.Chainloader.PluginInfos.Values) sb.Append(p.Metadata.Name).Append(' ').Append(p.Metadata.Version).Append("; ");
+            foreach (var p in BepInEx.Bootstrap.Chainloader.PluginInfos.Values) sb.Append(p.Metadata.Name).Append(" v").Append(p.Metadata.Version).Append("; ");
             sb.Append("\n\n----- BepInEx log (last ").Append(LogTail / 1024).Append(" KB) -----\n");
             sb.Append(ReadLogTail());
             return Scrub(sb.ToString());
@@ -79,7 +80,11 @@ namespace DigimonNetplay
                 if (!string.IsNullOrEmpty(machine) && machine.Length >= 3) text = Regex.Replace(text, @"\b" + Regex.Escape(machine) + @"\b", "<pc>", RegexOptions.IgnoreCase);
             }
             catch { }
-            return Ipv4.Replace(text, "x.x.x.x");
+            return Ipv4.Replace(text, m =>
+            {
+                for (int i = 1; i <= 4; i++) if (int.Parse(m.Groups[i].Value) > 255) return m.Value;
+                return "x.x.x.x";
+            });
         }
 
         private static string ReplaceIgnoreCase(string text, string find, string with)

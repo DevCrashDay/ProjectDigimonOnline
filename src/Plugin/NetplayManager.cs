@@ -161,6 +161,7 @@ namespace DigimonNetplay
         private void OnDestroy()
         {
             _client?.Dispose();
+            _connected?.Dispose();
             _localServer?.Stop();
         }
 
@@ -222,6 +223,8 @@ namespace DigimonNetplay
                         _serverName = w.ServerName;
                         _latestVersion = w.LatestVersion ?? "";
                         _downloadUrl = w.DownloadUrl ?? "";
+                        if (_reconnectTries > 0) Notify("Reconnected to the lobby server.");
+                        _reconnectTries = 0; // only a server that answers counts as a working connection
                         break;
                     case EvAccount a:
                         _accountName = a.Display; _rating = a.Rating; _wins = a.Wins; _losses = a.Losses; _rank = a.Rank;
@@ -255,6 +258,12 @@ namespace DigimonNetplay
                         _mux?.RemovePeer(pl.Slot);
                         _lobby.Picks.Remove(pl.Slot);
                         _lobby.Ready.Remove(pl.Slot);
+                        if (pl.Slot < Msg.FirstSpectatorSlot && _lobby.Matches > 0)
+                        {
+                            // The score is kept by seat; a new player in that seat starts a new score.
+                            _lobby.Wins.Clear();
+                            _lobby.Matches = 0;
+                        }
                         MatchSession.Current?.Core.OnPeerLeft(pl.Slot);
                         if (IsHost) BroadcastLobby();
                         break;
@@ -273,6 +282,7 @@ namespace DigimonNetplay
                         AddChat("* Room settings changed.");
                         break;
                     case EvRoomLeft left:
+                        MatchSession.Current?.End(left.Reason);
                         Notify(left.Reason);
                         _rejoinCode = null;
                         LeaveRoomState();
@@ -341,6 +351,9 @@ namespace DigimonNetplay
             {
                 _lobby.Picks.Clear();
                 _lobby.Ready.Clear();
+                _lobby.Wins.Clear(); // seats changed, so the score by seat no longer fits
+                _lobby.Matches = 0;
+                _myReady = false;
             }
             SendPick();
             if (!_show) OpenScreen();
@@ -358,7 +371,7 @@ namespace DigimonNetplay
         {
             if (_rejoinCode != null && _rejoinTries > 0 && !_inRoom)
             {
-                if (text.Contains("in a match") && _rejoinTries < 6) { _rejoinAt = Time.unscaledTime + 3f; return; }
+                if ((text.Contains("in a match") || text.Contains("is full")) && _rejoinTries < 6) { _rejoinAt = Time.unscaledTime + 3f; return; }
                 Notify("Could not get back into the room: " + text);
                 _rejoinCode = null;
                 return;
@@ -370,7 +383,14 @@ namespace DigimonNetplay
                 return;
             }
             Notify(text);
-            if (text.StartsWith("Version mismatch")) { _versionRefused = true; _wantConnection = false; }
+            if (text.StartsWith("Version mismatch"))
+            {
+                _versionRefused = true;
+                _wantConnection = false;
+                _client?.Dispose(); // the server hangs up too; show the offline page with the update notice
+                _client = null;
+                _status = "This lobby server runs a different version of the online mod.";
+            }
             if (!text.Contains("password")) _joinTarget = null; // keep the password box open to retry
         }
 
@@ -389,9 +409,8 @@ namespace DigimonNetplay
             LeaveRoomState();
             if (_wantConnection && !_versionRefused)
             {
-                _reconnectTries = 0;
                 ScheduleReconnect();
-                Notify("Lost the connection to the lobby server. Reconnecting...");
+                if (_reconnectTries == 0) Notify("Lost the connection to the lobby server. Reconnecting...");
             }
             else
             {
@@ -482,6 +501,7 @@ namespace DigimonNetplay
                     case GameMsg.StateCheck:
                         // A fast peer can talk lockstep before our Start arrives; keep it for the session.
                         // (A spectator who joined mid-match also hears the running match; that is dropped as stale.)
+                        if (_early.Count > 0 && Time.unscaledTime - _earlySince > 3f) _early.Clear(); // stale: a match we only walked in on
                         if (_early.Count == 0) _earlySince = Time.unscaledTime;
                         if (_early.Count < 4000) _early.Add(new KeyValuePair<int, byte[]>(from, payload));
                         break;
@@ -577,6 +597,12 @@ namespace DigimonNetplay
             if (!_connectDone) return;
             _connectDone = false;
             _connecting = false;
+            if (_connected != null && !_wantConnection)
+            {
+                _connected.Dispose(); // the player stopped reconnecting while this attempt was running
+                _connected = null;
+                return;
+            }
             if (_connected != null)
             {
                 _client = _connected;
@@ -584,8 +610,6 @@ namespace DigimonNetplay
                 _status = null;
                 _nextPing = 0;
                 _nextListAt = 0;
-                if (_reconnectTries > 0) Notify("Reconnected to the lobby server.");
-                _reconnectTries = 0;
                 if (_rejoinCode != null)
                 {
                     _rejoinTries = 1;
@@ -649,6 +673,18 @@ namespace DigimonNetplay
             if (_client == null || string.IsNullOrEmpty(code)) return;
             _pendingPassword = password ?? "";
             _client.JoinRoom(code, password, spectate);
+        }
+
+        private void QuickMatch()
+        {
+            _pendingPassword = "";
+            _client?.QuickMatch();
+        }
+
+        private void QueueRanked()
+        {
+            _pendingPassword = "";
+            _client?.QueueRanked();
         }
 
         private void LeaveRoom()
@@ -846,6 +882,7 @@ namespace DigimonNetplay
         public void OnMatchEnded(MatchSession session, string abortReason)
         {
             var cfg = session.Core.Config;
+            _early.Clear();
             _reopenWhenMenus = _inRoom;
             if (abortReason == null)
             {

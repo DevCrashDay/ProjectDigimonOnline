@@ -328,7 +328,8 @@ namespace DigimonNetplay.Shared
                         {
                             SendError(c, "Version mismatch: this server needs mod version " + LatestVersion + " (protocol " + Msg.ProtocolVersion +
                                          "), you have protocol " + proto + ". Update the mod: " + DownloadUrl);
-                            return;
+                            throw new IOException("protocol mismatch"); // hang up after telling them
+
                         }
                         c.Name = Sanitize(r.ReadString());
                         if (More(r)) c.ModVersion = Clip(r.ReadString(), 20);

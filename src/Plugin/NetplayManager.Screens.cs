@@ -17,6 +17,7 @@ namespace DigimonNetplay
 
         private const float GridTile = 78f;
         private const int GridRows = 3;
+        private int _gridSnappedFor = -1;
 
         private string PageKey()
         {
@@ -177,13 +178,13 @@ namespace DigimonNetplay
             {
                 GUILayout.BeginHorizontal(OnlineSkin.Row);
                 GUILayout.Label("Searching for a ranked opponent... " + _searchSecs / 60 + ":" + (_searchSecs % 60).ToString("00") + "   (" + _searchPlayers + " searching)", GUILayout.Width(560));
-                _nav.Button("Cancel", () => _client.CancelQueue(), true, GUILayout.Width(140));
+                _nav.Button("Cancel", () => _client?.CancelQueue(), true, GUILayout.Width(140));
                 GUILayout.EndHorizontal();
             }
 
             GUILayout.BeginHorizontal();
-            _nav.Button("Quick match", () => _client.QuickMatch(), true, GUILayout.Width(250), GUILayout.Height(46));
-            _nav.Button("Ranked", () => { _page = Page.Ranked; _client.GetLeaderboard(); }, true, GUILayout.Width(230), GUILayout.Height(46));
+            _nav.Button("Quick match", QuickMatch, true, GUILayout.Width(250), GUILayout.Height(46));
+            _nav.Button("Ranked", () => { _page = Page.Ranked; _client?.GetLeaderboard(); }, true, GUILayout.Width(230), GUILayout.Height(46));
             _nav.Button("Create room", () =>
             {
                 _page = Page.Create;
@@ -254,14 +255,15 @@ namespace DigimonNetplay
             _nav.Choice(_createPlayers, PlayerChoices, v => _createPlayers = v);
             GUILayout.Label("Who can join");
             _nav.Choice(_createVisibility, VisibilityChoices, v => _createVisibility = v);
+            // Decided before the password box draws, so typing cannot add or remove a label mid-frame.
+            bool needsPassword = _createVisibility == 1 && _createPassword.Trim().Length == 0;
             DrawVisibilityHelp(_createVisibility, ref _createPassword, "createpw");
             GUILayout.Space(10);
             GUILayout.BeginHorizontal();
-            bool needsPassword = _createVisibility == 1 && _createPassword.Trim().Length == 0;
             _nav.Button("Create", () =>
             {
                 _pendingPassword = _createVisibility == 1 ? _createPassword.Trim() : "";
-                _client.CreateRoom(_createPlayers == 0 ? 2 : 4, _createName,
+                _client?.CreateRoom(_createPlayers == 0 ? 2 : 4, _createName,
                     _createVisibility == 2 ? RoomVisibility.Private : RoomVisibility.Public, _pendingPassword);
             }, !needsPassword, GUILayout.Width(200));
             _nav.Button("Cancel", () => _page = Page.Browser, true, GUILayout.Width(160));
@@ -310,9 +312,9 @@ namespace DigimonNetplay
             if (_searching)
             {
                 GUILayout.Label("Searching... " + _searchSecs / 60 + ":" + (_searchSecs % 60).ToString("00") + "   (" + _searchPlayers + " searching). The search widens the longer you wait.");
-                _nav.Button("Cancel search", () => _client.CancelQueue(), true, GUILayout.Width(300), GUILayout.Height(46));
+                _nav.Button("Cancel search", () => _client?.CancelQueue(), true, GUILayout.Width(300), GUILayout.Height(46));
             }
-            else _nav.Button("Find a ranked match", () => _client.QueueRanked(), true, GUILayout.Width(360), GUILayout.Height(46));
+            else _nav.Button("Find a ranked match", QueueRanked, true, GUILayout.Width(360), GUILayout.Height(46));
             GUILayout.BeginHorizontal();
             _nav.Button("Leaderboard", () => { _page = Page.Leaderboard; _nextLeadersAt = 0; }, true, GUILayout.Width(220));
             _nav.Button("Back to the rooms", () => _page = Page.Browser, true, GUILayout.Width(260));
@@ -405,7 +407,7 @@ namespace DigimonNetplay
                     foreach (int s in SpectatorSlots.ToList())
                     {
                         int slot = s;
-                        _nav.Button("Remove " + NameOf(s), () => _client.Kick(slot), true);
+                        _nav.Button("Remove " + NameOf(s), () => _client?.Kick(slot), true);
                     }
                     GUILayout.EndHorizontal();
                 }
@@ -439,7 +441,7 @@ namespace DigimonNetplay
             DrawChat();
             GUILayout.Space(6);
             GUILayout.BeginHorizontal();
-            if (_ranked && !IsSpectator) _nav.Button("Find a new opponent", () => { LeaveRoom(); _client.QueueRanked(); _page = Page.Ranked; }, true, GUILayout.Width(300));
+            if (_ranked && !IsSpectator) _nav.Button("Find a new opponent", () => { LeaveRoom(); QueueRanked(); _page = Page.Ranked; }, true, GUILayout.Width(300));
             _nav.Button(IsSpectator ? "Stop watching" : "Leave room", LeaveRoom, true, GUILayout.Width(220));
             GUILayout.EndHorizontal();
         }
@@ -475,7 +477,7 @@ namespace DigimonNetplay
             if (IsHost && !_ranked && slot != _mySlot)
             {
                 int s = slot;
-                _nav.Button("Kick", () => _client.Kick(s), true, GUILayout.Width(80));
+                _nav.Button("Kick", () => _client?.Kick(s), true, GUILayout.Width(80));
             }
             GUILayout.EndHorizontal();
         }
@@ -589,17 +591,17 @@ namespace DigimonNetplay
             _nav.Choice(_setPlayers, PlayerChoices, v => _setPlayers = v);
             GUILayout.Label("Who can join");
             _nav.Choice(_setVisibility, VisibilityChoices, v => _setVisibility = v);
-            DrawVisibilityHelp(_setVisibility, ref _setPassword, "setpw");
-            if (_setVisibility == 1 && _roomHasPassword && _setPassword.Length == 0)
-                GUILayout.Label("Leave the password empty to keep the current one.", OnlineSkin.Small);
+            bool keepHint = _setVisibility == 1 && _roomHasPassword && _setPassword.Length == 0;
             bool needsPassword = _setVisibility == 1 && _setPassword.Trim().Length == 0 && !_roomHasPassword;
+            DrawVisibilityHelp(_setVisibility, ref _setPassword, "setpw");
+            if (keepHint) GUILayout.Label("Leave the password empty to keep the current one.", OnlineSkin.Small);
             GUILayout.BeginHorizontal();
             _nav.Button("Save", () =>
             {
                 string pw = _setPassword.Trim();
                 bool change = _setVisibility != 1 || pw.Length > 0;
                 if (_setVisibility != 1) pw = "";
-                _client.UpdateRoom(_setPlayers == 0 ? 2 : 4, _setName, _setVisibility == 2 ? RoomVisibility.Private : RoomVisibility.Public, change, pw);
+                _client?.UpdateRoom(_setPlayers == 0 ? 2 : 4, _setName, _setVisibility == 2 ? RoomVisibility.Private : RoomVisibility.Public, change, pw);
                 if (change) _roomPassword = pw;
                 _page = Page.Browser;
             }, !needsPassword, GUILayout.Width(200));
@@ -679,8 +681,13 @@ namespace DigimonNetplay
             int pos = shown.IndexOf(_charIdx);
             int selRow = pos < 0 ? 0 : pos / perRow;
             _gridTop = Mathf.Clamp(_gridTop, 0, Mathf.Max(0, rows - GridRows));
-            if (selRow < _gridTop) _gridTop = selRow;
-            if (selRow >= _gridTop + GridRows) _gridTop = selRow - GridRows + 1;
+            if (_charIdx != _gridSnappedFor)
+            {
+                // Bring a newly picked Digimon into view; otherwise leave the scroll to the mouse wheel.
+                _gridSnappedFor = _charIdx;
+                if (selRow < _gridTop) _gridTop = selRow;
+                if (selRow >= _gridTop + GridRows) _gridTop = selRow - GridRows + 1;
+            }
 
             var e = Event.current;
             if (e.type == EventType.ScrollWheel && area.Contains(e.mousePosition))
