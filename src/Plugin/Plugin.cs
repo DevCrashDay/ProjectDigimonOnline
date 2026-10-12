@@ -11,11 +11,14 @@ namespace DigimonNetplay
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "community.projectdigimon.netplay";
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
+
+        /// <summary>Lobby server used when the config leaves LobbyServer empty.</summary>
+        public const string OfficialServer = "";
 
         internal static ManualLogSource Log;
-        internal static ConfigEntry<string> ServerHost;
-        internal static ConfigEntry<int> ServerPort;
+        internal static ConfigEntry<string> LobbyServer;
+        internal static ConfigEntry<int> HostPort;
         internal static ConfigEntry<string> PlayerName;
         internal static ConfigEntry<string> LocalControls;
         internal static ConfigEntry<int> DefaultInputDelay;
@@ -25,8 +28,8 @@ namespace DigimonNetplay
         private void Awake()
         {
             Log = Logger;
-            ServerHost = Config.Bind("Connection", "ServerHost", "127.0.0.1", "Address of the netplay relay server (or the host's public IP when they host on their PC).");
-            ServerPort = Config.Bind("Connection", "ServerPort", 7777, "TCP port of the relay server.");
+            LobbyServer = Config.Bind("Connection", "LobbyServer", "", "Lobby server. Empty = the official server. wss://your.domain for a server behind Cloudflare/HTTPS, ws://host:port for plain WebSocket, host:port for a direct TCP connection.");
+            HostPort = Config.Bind("Connection", "HostPort", 7777, "TCP port used by \"Host on this PC\".");
             PlayerName = Config.Bind("Connection", "PlayerName", "Tamer", "Name shown to other players.");
             LocalControls = Config.Bind("Input", "LocalControls", "K1,G1", "Which of the game's control sets drive your fighter online, comma separated (K1, K2 = keyboard layouts, G1..G6 = gamepads). They are merged.");
             DefaultInputDelay = Config.Bind("Netplay", "DefaultInputDelay", 3, "Frames of input delay a new room starts with (host can change it in the lobby). 2-3 for nearby players, 4-6 for long distance.");

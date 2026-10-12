@@ -1,0 +1,10 @@
+# Cloudflare Tunnel config: puts the lobby server at wss://lobby.example.com without opening any port.
+# Replace lobby.example.com with your hostname and <TUNNEL-ID> with the id from `cloudflared tunnel create`.
+# Save as /etc/cloudflared/config.yml and run `sudo cloudflared service install`.
+tunnel: <TUNNEL-ID>
+credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  - hostname: lobby.example.com
+    service: http://localhost:7777
+  - service: http_status:404

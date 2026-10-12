@@ -10,5 +10,6 @@
   <ItemGroup>
     <Compile Include="../Shared/Wire.cs" />
     <Compile Include="../Shared/RelayServer.cs" />
+    <Compile Include="../Shared/WebSocket.cs" />
   </ItemGroup>
 </Project>

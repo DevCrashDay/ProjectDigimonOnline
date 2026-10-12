@@ -8,7 +8,7 @@ namespace DigimonNetplay
     {
         public const float CanvasHeight = 720f;
 
-        public static GUIStyle Panel, Title, Hint, Hud, Notice;
+        public static GUIStyle Panel, Title, Hint, Hud, Notice, Heading, Small, Warn, Link, Row;
         public static Texture2D Dim;
 
         private static GUISkin _skin;
@@ -68,6 +68,17 @@ namespace DigimonNetplay
             Hud = new GUIStyle(_skin.label) { fontSize = 18, wordWrap = false };
             Notice = new GUIStyle(_skin.box) { fontSize = 19, alignment = TextAnchor.MiddleCenter, font = _font };
             Notice.normal.textColor = white;
+            Heading = new GUIStyle(_skin.label) { fontSize = 24, wordWrap = false };
+            Heading.normal.textColor = accent;
+            Heading.margin = new RectOffset(4, 4, 8, 4);
+            Small = new GUIStyle(_skin.label) { fontSize = 17 };
+            Small.normal.textColor = new Color(0.8f, 0.85f, 0.95f);
+            Warn = new GUIStyle(_skin.label);
+            Warn.normal.textColor = new Color(1f, 0.55f, 0.45f);
+            Link = new GUIStyle(_skin.label) { fontSize = 18 };
+            Link.normal.textColor = accent;
+            Link.hover.textColor = Color.white;
+            Row = new GUIStyle { normal = { background = Tex(new Color(1f, 1f, 1f, 0.06f)) }, margin = new RectOffset(0, 0, 2, 2), padding = new RectOffset(6, 6, 2, 2) };
             Dim = Tex(new Color(0f, 0f, 0f, 0.6f));
         }
 

@@ -14,6 +14,7 @@ using DigimonNetplay.Shared;
 internal static class Program
 {
     private static int _failures;
+    private static bool _webSocket; // connect test clients the way the game does behind Cloudflare
 
     private static int Main()
     {
@@ -28,6 +29,14 @@ internal static class Program
         Run("desync is detected and corrected toward the host", () => Scenario(port, players: 2, delay: 3, segments: 1, framesPerSegment: 300, jitterMs: 4, injectDesync: true));
         Run("a player leaving aborts the match for the others", () => LeaveScenario(port));
         Run("lobby: room codes, full rooms, bad codes, version check", () => LobbyScenario(port));
+        Run("lobby browser: public, password and private rooms, in-match rooms", () => BrowserScenario(port));
+        _webSocket = true;
+        Run("WebSocket: 1v1, delay 3, 2 rounds", () => Scenario(port, players: 2, delay: 3, segments: 2, framesPerSegment: 180, jitterMs: 6, injectDesync: false));
+        Run("WebSocket: 4 players, delay 2", () => Scenario(port, players: 4, delay: 2, segments: 1, framesPerSegment: 180, jitterMs: 8, injectDesync: false));
+        Run("WebSocket: lobby browser", () => BrowserScenario(port));
+        _webSocket = false;
+        Run("HTTP status page", () => StatusScenario(port));
+        Run("server address parsing", AddressScenario);
 
         server.Stop();
         Console.WriteLine(_failures == 0 ? "ALL TESTS PASSED" : _failures + " TEST(S) FAILED");
@@ -48,7 +57,8 @@ internal static class Program
     private static RelayClient Connect(int port, string name)
     {
         var c = new RelayClient();
-        c.Connect("127.0.0.1", port, name);
+        if (_webSocket) c.Connect("ws://127.0.0.1:" + port + "/", name);
+        else c.Connect("127.0.0.1", port, name);
         return c;
     }
 
@@ -315,5 +325,83 @@ internal static class Program
             Check(type == Msg.Error && r.ReadString().Contains("Version mismatch"), "protocol mismatch not reported");
         old.Close();
         guest.Dispose(); third.Dispose();
+    }
+
+    private static void BrowserScenario(int port)
+    {
+        var a = Connect(port, "Agumon");
+        var b = Connect(port, "Gabumon");
+        var c = Connect(port, "Patamon");
+        var d = Connect(port, "Tentomon");
+        a.CreateRoom(2, "Open room", RoomVisibility.Public, "");
+        var open = WaitFor<EvRoomJoined>(a);
+        Check(open.Name == "Open room" && open.Visibility == RoomVisibility.Public && !open.HasPassword, "open room info wrong");
+        b.CreateRoom(4, "  Locked\u0007 room  ", RoomVisibility.Public, "secret");
+        var locked = WaitFor<EvRoomJoined>(b);
+        Check(locked.Name == "Locked room" && locked.HasPassword && locked.MaxPlayers == 4, "locked room info wrong: " + locked.Name);
+        c.CreateRoom(2, "", RoomVisibility.Private, "");
+        var priv = WaitFor<EvRoomJoined>(c);
+        Check(priv.Name == "Patamon's room" && priv.Visibility == RoomVisibility.Private, "private room info wrong: " + priv.Name);
+
+        d.ListRooms();
+        var list = WaitFor<EvRoomList>(d);
+        Check(list.PlayersOnline >= 4, "online count " + list.PlayersOnline);
+        var openRow = list.Rooms.FirstOrDefault(r => r.Code == open.Code);
+        var lockedRow = list.Rooms.FirstOrDefault(r => r.Code == locked.Code);
+        Check(openRow != null && openRow.HostName == "Agumon" && openRow.Players == 1 && openRow.MaxPlayers == 2 && !openRow.Locked, "open room not listed right");
+        Check(lockedRow != null && lockedRow.Locked && lockedRow.MaxPlayers == 4, "locked room not listed right");
+        Check(list.Rooms.All(r => r.Code != priv.Code), "private room was listed");
+
+        d.JoinRoom(locked.Code, "");
+        Check(WaitFor<EvError>(d).Text.Contains("needs a password"), "locked room joined without password");
+        d.JoinRoom(locked.Code, "wrong");
+        Check(WaitFor<EvError>(d).Text.Contains("Wrong password"), "wrong password accepted");
+        d.JoinRoom(locked.Code, "secret");
+        Check(WaitFor<EvRoomJoined>(d).Code == locked.Code, "right password refused");
+        d.LeaveRoom();
+        d.JoinRoom(priv.Code.ToLowerInvariant());
+        Check(WaitFor<EvRoomJoined>(d).Code == priv.Code, "private room not joinable by code");
+        d.LeaveRoom();
+
+        a.SetInMatch(true);
+        Thread.Sleep(100);
+        d.ListRooms();
+        Check(WaitFor<EvRoomList>(d).Rooms.First(r => r.Code == open.Code).InMatch, "room not shown as in match");
+        d.JoinRoom(open.Code);
+        Check(WaitFor<EvError>(d).Text.Contains("in a match"), "joined a room during its match");
+        a.SetInMatch(false);
+        Thread.Sleep(100);
+        d.JoinRoom(open.Code);
+        Check(WaitFor<EvRoomJoined>(d).Code == open.Code, "room not joinable after its match");
+
+        a.Dispose();
+        Check(WaitFor<EvError>(d).Text.Contains("host closed"), "guest not told the host left");
+        Thread.Sleep(100);
+        d.ListRooms();
+        Check(WaitFor<EvRoomList>(d).Rooms.All(r => r.Code != open.Code), "closed room still listed");
+        b.Dispose(); c.Dispose(); d.Dispose();
+    }
+
+    private static void StatusScenario(int port)
+    {
+        using (var http = new System.Net.Http.HttpClient())
+        {
+            string json = http.GetStringAsync("http://127.0.0.1:" + port + "/status").Result;
+            Check(json.Contains("\"protocol\":" + Msg.ProtocolVersion) && json.Contains("\"rooms\":"), "status page: " + json);
+        }
+    }
+
+    private static void AddressScenario()
+    {
+        var a = ServerAddress.Parse("wss://lobby.example.com");
+        Check(a.Tls && a.WebSocket && a.Port == 443 && a.Host == "lobby.example.com" && a.Path == "/" && a.HostHeader == "lobby.example.com", "wss parse");
+        a = ServerAddress.Parse("ws://1.2.3.4:8080/netplay");
+        Check(!a.Tls && a.WebSocket && a.Port == 8080 && a.Path == "/netplay" && a.HostHeader == "1.2.3.4:8080", "ws parse");
+        a = ServerAddress.Parse("example.org:9000");
+        Check(!a.WebSocket && a.Port == 9000 && a.Host == "example.org", "raw parse");
+        a = ServerAddress.Parse("example.org");
+        Check(!a.WebSocket && a.Port == ServerAddress.DefaultPort, "raw default port");
+        a = ServerAddress.Parse("https://lobby.example.com/");
+        Check(a.Tls && a.WebSocket, "https parse");
     }
 }

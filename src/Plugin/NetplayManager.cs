@@ -1,23 +1,46 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using DigimonNetplay.Shared;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 namespace DigimonNetplay
 {
-    /// <summary>Connection, lobby and the in-game netplay window.</summary>
+    /// <summary>Connection, lobby browser, room lobby and the in-game online screen.</summary>
     internal sealed class NetplayManager : MonoBehaviour
     {
         public static NetplayManager Instance { get; private set; }
 
         private RelayClient _client;
         private RelayServer _localServer;
-        private string _hostField, _portField, _nameField, _codeField = "";
+        private string _serverField, _hostPortField, _nameField, _codeField = "";
+
+        // connecting happens on a worker thread so the game never freezes on a slow or dead server
+        private volatile bool _connectDone;
+        private volatile RelayClient _connected;
+        private volatile string _connectError;
+        private bool _connecting, _autoConnectTried, _showAdvanced;
+        private string _status;
+
+        // lobby browser
+        private enum Page { Browser, Create }
+        private Page _page;
+        private string _serverName;
+        private int _playersOnline;
+        private RoomInfo[] _rooms = new RoomInfo[0];
+        private float _nextListAt;
+        private string _joinTarget, _joinPassword = "", _codePassword = "";
+        private string _createName = "", _createPassword = "";
+        private int _createPlayers, _createVisibility; // toolbar indexes
+        private static readonly string[] PlayerChoices = { "1 vs 1", "4 players" };
+        private static readonly string[] VisibilityChoices = { "Public", "Password", "Private (code)" };
 
         private bool _inRoom;
-        private string _roomCode;
+        private string _roomCode, _roomName;
+        private byte _roomVisibility;
+        private bool _roomHasPassword, _inMatchFlag;
         private int _mySlot = -1, _hostSlot, _maxPlayers;
         private readonly Dictionary<int, string> _names = new Dictionary<int, string>();
         private LobbyInfo _lobby = new LobbyInfo();
@@ -43,7 +66,24 @@ namespace DigimonNetplay
         public bool InRoom => _inRoom;
 
         /// <summary>Opens the online screen (from the main menu's ONLINE entry or after an online match).</summary>
-        public void OpenScreen() => _show = true;
+        public void OpenScreen()
+        {
+            _show = true;
+            if (_client == null && !_connecting && !_autoConnectTried && GameBridge.GameReady && EffectiveServer.Length > 0)
+            {
+                _autoConnectTried = true;
+                BeginConnect(EffectiveServer);
+            }
+        }
+
+        private static string EffectiveServer
+        {
+            get
+            {
+                string s = (Plugin.LobbyServer.Value ?? "").Trim();
+                return s.Length > 0 ? s : Plugin.OfficialServer;
+            }
+        }
 
         private void CloseScreen()
         {
@@ -54,8 +94,8 @@ namespace DigimonNetplay
         private void Awake()
         {
             Instance = this;
-            _hostField = Plugin.ServerHost.Value;
-            _portField = Plugin.ServerPort.Value.ToString();
+            _serverField = EffectiveServer;
+            _hostPortField = Plugin.HostPort.Value.ToString();
             _nameField = Plugin.PlayerName.Value;
             if (!Enum.TryParse(Plugin.ToggleKey.Value, true, out _toggleKey)) _toggleKey = Key.F8;
             _lobby.InputDelay = Mathf.Clamp(Plugin.DefaultInputDelay.Value, 0, 12);
@@ -88,6 +128,8 @@ namespace DigimonNetplay
                 {
                     case EvRoomJoined j:
                         _inRoom = true; _roomCode = j.Code; _mySlot = j.MySlot; _hostSlot = j.HostSlot; _maxPlayers = j.MaxPlayers;
+                        _roomName = j.Name; _roomVisibility = j.Visibility; _roomHasPassword = j.HasPassword;
+                        _joinTarget = null; _joinPassword = ""; _page = Page.Browser; _inMatchFlag = false;
                         _names.Clear(); _names[_mySlot] = _nameField;
                         _lobby = new LobbyInfo { InputDelay = Mathf.Clamp(Plugin.DefaultInputDelay.Value, 0, 12), Stage = (int)GameData.STAGES._RANDOM_ };
                         _early.Clear();
@@ -108,6 +150,14 @@ namespace DigimonNetplay
                     case EvError e:
                         Notify(e.Text);
                         if (e.Text.Contains("host closed")) LeaveRoomState();
+                        if (!e.Text.Contains("password")) _joinTarget = null; // keep the password box open to retry
+                        break;
+                    case EvWelcome w:
+                        _serverName = w.ServerName;
+                        break;
+                    case EvRoomList l:
+                        _rooms = l.Rooms;
+                        _playersOnline = l.PlayersOnline;
                         break;
                     case EvPong p:
                         _rtt = p.RttMs;
@@ -116,7 +166,8 @@ namespace DigimonNetplay
                         HandleData(d.FromSlot, d.Payload);
                         break;
                     case EvDisconnected dc:
-                        Notify("Disconnected from server: " + dc.Reason);
+                        Notify("Disconnected from the lobby server: " + dc.Reason);
+                        _status = "Disconnected: " + dc.Reason;
                         MatchSession.Current?.End("Disconnected from the server.");
                         _client = null;
                         LeaveRoomState();
@@ -186,34 +237,72 @@ namespace DigimonNetplay
             };
         }
 
-        private void Connect(bool hostLocally)
+        private void BeginConnect(string address)
         {
-            if (!int.TryParse(_portField, out int port)) { Notify("Port must be a number."); return; }
-            Plugin.ServerHost.Value = _hostField;
-            Plugin.ServerPort.Value = port;
+            if (_connecting) return;
             Plugin.PlayerName.Value = _nameField;
-            string host = _hostField;
+            _connecting = true;
+            _connectDone = false;
+            _connected = null;
+            _connectError = null;
+            _status = "Connecting to " + address + " ...";
+            string name = _nameField;
+            new Thread(() =>
+            {
+                try
+                {
+                    var c = new RelayClient();
+                    c.Connect(address, name);
+                    _connected = c;
+                }
+                catch (Exception e)
+                {
+                    _connectError = e.Message;
+                }
+                _connectDone = true;
+            }) { IsBackground = true, Name = "netplay-connect" }.Start();
+        }
+
+        private void FinishConnect()
+        {
+            if (!_connectDone) return;
+            _connectDone = false;
+            _connecting = false;
+            if (_connected != null)
+            {
+                _client = _connected;
+                _connected = null;
+                _status = null;
+                _nextPing = 0;
+                _nextListAt = 0;
+                _page = Page.Browser;
+            }
+            else
+            {
+                _status = "Could not reach the lobby server: " + _connectError;
+                Plugin.Log.LogWarning(_status);
+            }
+        }
+
+        private void HostOnThisPc()
+        {
+            if (!int.TryParse(_hostPortField, out int port) || port <= 0 || port > 65535) { Notify("Port must be a number."); return; }
+            Plugin.HostPort.Value = port;
             try
             {
-                if (hostLocally)
+                if (_localServer == null)
                 {
-                    if (_localServer == null)
-                    {
-                        _localServer = new RelayServer { Log = m => Plugin.Log.LogInfo("[relay] " + m) };
-                        _localServer.Start(port);
-                    }
-                    host = "127.0.0.1";
+                    _localServer = new RelayServer { Log = m => Plugin.Log.LogInfo("[relay] " + m), ServerName = _nameField + "'s PC" };
+                    _localServer.Start(port);
                 }
-                _client = new RelayClient();
-                _client.Connect(host, port, _nameField);
-                _nextPing = 0;
-                Notify(hostLocally ? "Hosting on this PC, port " + port + ". Friends connect to your public IP (forward TCP " + port + ")." : "Connected to " + host + ":" + port + ".");
             }
             catch (Exception e)
             {
-                _client = null;
-                Notify("Could not connect: " + e.Message);
+                Notify("Could not open port " + port + ": " + e.Message);
+                return;
             }
+            Notify("Hosting on this PC, port " + port + ". Friends connect to " + "your public IP:" + port + " (forward TCP " + port + ").");
+            BeginConnect("127.0.0.1:" + port);
         }
 
         private void Disconnect()
@@ -223,12 +312,14 @@ namespace DigimonNetplay
             _client = null;
             _localServer?.Stop();
             _localServer = null;
+            _status = null;
+            _rooms = new RoomInfo[0];
             LeaveRoomState();
         }
 
         private void LeaveRoomState()
         {
-            _inRoom = false; _roomCode = null; _mySlot = -1; _names.Clear(); _lobby.Picks.Clear(); _early.Clear();
+            _inRoom = false; _roomCode = null; _roomName = null; _mySlot = -1; _nextListAt = 0; _names.Clear(); _lobby.Picks.Clear(); _early.Clear();
         }
 
         // ------------------------------------------------------------------ starting
@@ -274,6 +365,7 @@ namespace DigimonNetplay
             var controls = Plugin.LocalControls.Value.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries);
             EnableGameInput(true);
             MatchSession.Begin(cfg, me, IsHost, Broadcast, controls);
+            if (IsHost) { _client?.SetInMatch(true); _inMatchFlag = true; } // the lobby browser shows the room as busy
             foreach (var e in _early) MatchSession.Current?.Core.Handle(e.Key, e.Value);
             _early.Clear();
             _show = false;
@@ -305,7 +397,14 @@ namespace DigimonNetplay
                 FrameGate.Install();
                 FrameGate.LastTickFrame = Time.frameCount;
             }
+            FinishConnect();
             if (MatchSession.Current == null) PumpNetwork();
+            if (_inMatchFlag && MatchSession.Current == null) { _client?.SetInMatch(false); _inMatchFlag = false; }
+            if (_show && _client != null && !_inRoom && _page == Page.Browser && Time.unscaledTime >= _nextListAt)
+            {
+                _client.ListRooms();
+                _nextListAt = Time.unscaledTime + 3f;
+            }
             // Typing a room code must not drive the menus behind the window.
             EnableGameInput(!(_show && GUIUtility.keyboardControl != 0 && MatchSession.Current == null));
         }
@@ -348,9 +447,10 @@ namespace DigimonNetplay
             GUILayout.Label("ONLINE VERSUS", OnlineSkin.Title);
             _scroll = GUILayout.BeginScrollView(_scroll);
             if (!GameBridge.GameReady) GUILayout.Label("Waiting for the game to finish loading...");
-            else if (_client == null) DrawConnect();
-            else if (!_inRoom) DrawRoomChoice();
-            else DrawLobby();
+            else if (_client == null) DrawOffline();
+            else if (_inRoom) DrawLobby();
+            else if (_page == Page.Create) DrawCreate();
+            else DrawBrowser();
             GUILayout.EndScrollView();
             GUILayout.BeginHorizontal();
             GUILayout.Label(session == null ? "Esc / B: back      " + _toggleKey + ": open or close anywhere" : _toggleKey + ": hide", OnlineSkin.Hint);
@@ -375,42 +475,152 @@ namespace DigimonNetplay
             GUI.Label(new Rect(10, OnlineSkin.CanvasHeight - 30, width - 20, 26), text, OnlineSkin.Hud);
         }
 
-        private void DrawConnect()
+        // ------------------------------------------------------------------ screens
+
+        private void DrawOffline()
         {
+            bool hasServer = EffectiveServer.Length > 0;
+            if (_connecting) GUILayout.Label(_status);
+            else if (_status != null) GUILayout.Label(_status, OnlineSkin.Warn);
+            else if (!hasServer) GUILayout.Label("No lobby server is set yet. Enter one under Server settings.", OnlineSkin.Warn);
+
             GUILayout.Label("Your name");
             _nameField = GUILayout.TextField(_nameField, 20);
-            GUILayout.Label("Server address and port");
+            GUI.enabled = !_connecting && hasServer;
+            if (GUILayout.Button(_status == null ? "Connect to the lobby server" : "Try again")) BeginConnect(EffectiveServer);
+            GUI.enabled = true;
+
+            GUILayout.Space(10);
+            _showAdvanced = GUILayout.Toggle(_showAdvanced, _showAdvanced ? "Server settings  (hide)" : "Server settings", OnlineSkin.Link);
+            if (!_showAdvanced) return;
+            GUILayout.Label("Lobby server address (wss://your.domain, ws://host:port or host:port). Leave empty for the official server.", OnlineSkin.Small);
             GUILayout.BeginHorizontal();
-            _hostField = GUILayout.TextField(_hostField, GUILayout.Width(420));
-            _portField = GUILayout.TextField(_portField, 6);
+            _serverField = GUILayout.TextField(_serverField, 120, GUILayout.Width(500));
+            GUI.enabled = !_connecting;
+            if (GUILayout.Button("Connect"))
+            {
+                Plugin.LobbyServer.Value = _serverField.Trim() == Plugin.OfficialServer ? "" : _serverField.Trim();
+                if (EffectiveServer.Length > 0) BeginConnect(EffectiveServer);
+            }
+            GUI.enabled = true;
             GUILayout.EndHorizontal();
-            if (GUILayout.Button("Connect to server")) Connect(false);
+            if (Plugin.OfficialServer.Length > 0 && GUILayout.Button("Use the official server", GUILayout.Width(300)))
+            {
+                _serverField = Plugin.OfficialServer;
+                Plugin.LobbyServer.Value = "";
+            }
             GUILayout.Space(8);
-            GUILayout.Label("No server? Host on this PC (friends need your public IP and TCP " + _portField + " forwarded):");
-            if (GUILayout.Button("Host on this PC")) Connect(true);
+            GUILayout.Label("Or host a private server on this PC. Friends connect to your public IP and port; forward that TCP port on your router.", OnlineSkin.Small);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Port", GUILayout.Width(60));
+            _hostPortField = GUILayout.TextField(_hostPortField, 6, GUILayout.Width(100));
+            GUI.enabled = !_connecting;
+            if (GUILayout.Button("Host on this PC")) HostOnThisPc();
+            GUI.enabled = true;
+            GUILayout.EndHorizontal();
         }
 
-        private void DrawRoomChoice()
+        private void DrawBrowser()
         {
-            GUILayout.Label("Connected" + (_rtt >= 0 ? " (" + _rtt.ToString("0") + " ms)" : "") + ".");
+            GUILayout.Label((_serverName ?? "Lobby server") + "   |   " + _playersOnline + " online   |   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms   |   you are " + _nameField, OnlineSkin.Small);
             GUILayout.BeginHorizontal();
-            if (GUILayout.Button("Create 1v1 room")) _client.CreateRoom(2);
-            if (GUILayout.Button("Create 4-player room")) _client.CreateRoom(4);
+            if (GUILayout.Button("Create room", GUILayout.Width(200)))
+            {
+                _page = Page.Create;
+                if (_createName.Length == 0) _createName = _nameField + "'s room";
+            }
+            if (GUILayout.Button("Refresh", GUILayout.Width(130))) _nextListAt = 0;
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Disconnect", GUILayout.Width(160))) Disconnect();
             GUILayout.EndHorizontal();
-            GUILayout.Space(6);
-            GUILayout.Label("Join with a room code");
+
             GUILayout.BeginHorizontal();
-            _codeField = GUILayout.TextField(_codeField.ToUpperInvariant(), 5, GUILayout.Width(160));
-            if (GUILayout.Button("Join") && _codeField.Length > 0) _client.JoinRoom(_codeField);
+            GUILayout.Label("Room code", GUILayout.Width(130));
+            _codeField = GUILayout.TextField(_codeField.ToUpperInvariant(), 5, GUILayout.Width(110));
+            GUILayout.Label("Password", GUILayout.Width(110));
+            _codePassword = GUILayout.PasswordField(_codePassword, '*', 32, GUILayout.Width(160));
+            if (GUILayout.Button("Join") && _codeField.Length > 0) _client.JoinRoom(_codeField, _codePassword);
             GUILayout.EndHorizontal();
+
+            GUILayout.Space(8);
+            GUILayout.Label("OPEN ROOMS", OnlineSkin.Heading);
+            if (_rooms.Length == 0)
+            {
+                GUILayout.Label("No public rooms right now. Create one, or join a private room with its code.", OnlineSkin.Small);
+                return;
+            }
+            foreach (var r in _rooms)
+            {
+                bool full = r.Players >= r.MaxPlayers;
+                GUILayout.BeginHorizontal(OnlineSkin.Row);
+                GUILayout.Label((r.Locked ? "[PW]  " : "") + r.Name, GUILayout.Width(300));
+                GUILayout.Label(r.HostName, OnlineSkin.Small, GUILayout.Width(170));
+                GUILayout.Label(r.Players + "/" + r.MaxPlayers + (r.MaxPlayers == 2 ? "  1v1" : "  FFA"), GUILayout.Width(110));
+                GUI.enabled = !full && !r.InMatch;
+                if (GUILayout.Button(r.InMatch ? "In match" : full ? "Full" : "Join", GUILayout.Width(110)))
+                {
+                    if (r.Locked) { _joinTarget = r.Code; _joinPassword = ""; }
+                    else _client.JoinRoom(r.Code);
+                }
+                GUI.enabled = true;
+                GUILayout.EndHorizontal();
+                if (_joinTarget == r.Code)
+                {
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("Password for " + r.Name, GUILayout.Width(300));
+                    _joinPassword = GUILayout.PasswordField(_joinPassword, '*', 32, GUILayout.Width(200));
+                    if (GUILayout.Button("Join", GUILayout.Width(90))) _client.JoinRoom(r.Code, _joinPassword);
+                    if (GUILayout.Button("Cancel", GUILayout.Width(110))) { _joinTarget = null; _joinPassword = ""; }
+                    GUILayout.EndHorizontal();
+                }
+            }
+        }
+
+        private void DrawCreate()
+        {
+            GUILayout.Label("CREATE A ROOM", OnlineSkin.Heading);
+            GUILayout.Label("Room name");
+            _createName = GUILayout.TextField(_createName, 32);
+            GUILayout.Label("Players");
+            _createPlayers = GUILayout.Toolbar(_createPlayers, PlayerChoices);
+            GUILayout.Label("Who can join");
+            _createVisibility = GUILayout.Toolbar(_createVisibility, VisibilityChoices);
+            switch (_createVisibility)
+            {
+                case 0:
+                    GUILayout.Label("Listed in the lobby. Anyone can join.", OnlineSkin.Small);
+                    break;
+                case 1:
+                    GUILayout.Label("Listed in the lobby with a lock. Players need the password.", OnlineSkin.Small);
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("Password", GUILayout.Width(130));
+                    _createPassword = GUILayout.TextField(_createPassword, 32, GUILayout.Width(260));
+                    GUILayout.EndHorizontal();
+                    break;
+                default:
+                    GUILayout.Label("Not listed. Share the room code with your friends.", OnlineSkin.Small);
+                    break;
+            }
             GUILayout.Space(10);
-            if (GUILayout.Button("Disconnect")) Disconnect();
+            GUILayout.BeginHorizontal();
+            bool needsPassword = _createVisibility == 1 && _createPassword.Trim().Length == 0;
+            GUI.enabled = !needsPassword;
+            if (GUILayout.Button("Create", GUILayout.Width(200)))
+                _client.CreateRoom(_createPlayers == 0 ? 2 : 4, _createName,
+                    _createVisibility == 2 ? RoomVisibility.Private : RoomVisibility.Public,
+                    _createVisibility == 1 ? _createPassword.Trim() : "");
+            GUI.enabled = true;
+            if (GUILayout.Button("Cancel", GUILayout.Width(160))) _page = Page.Browser;
+            GUILayout.EndHorizontal();
+            if (needsPassword) GUILayout.Label("Enter a password.", OnlineSkin.Small);
         }
 
         private void DrawLobby()
         {
             bool inMatch = MatchSession.Current != null;
-            GUILayout.Label("Room code: " + _roomCode + "   (" + _names.Count + "/" + _maxPlayers + ")   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms");
+            GUILayout.Label((_roomName ?? "Room").ToUpperInvariant(), OnlineSkin.Heading);
+            string access = _roomVisibility == RoomVisibility.Private ? "private, share the code" : _roomHasPassword ? "public with password" : "public";
+            GUILayout.Label("Code " + _roomCode + "   (" + access + ")   |   " + _names.Count + "/" + _maxPlayers + " players   |   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms", OnlineSkin.Small);
             foreach (var kv in _names.OrderBy(k => k.Key))
             {
                 _lobby.Picks.TryGetValue(kv.Key, out var p);

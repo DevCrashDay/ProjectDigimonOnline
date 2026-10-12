@@ -1,0 +1,19 @@
+# systemd service for the lobby server.
+# Copy the server to /opt/digimon-netplay/DigimonNetplayServer, then:
+#   sudo cp digimon-netplay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now digimon-netplay
+#   journalctl -u digimon-netplay -f      (live log)
+[Unit]
+Description=Digimon Netplay lobby server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/digimon-netplay/DigimonNetplayServer --port 7777 --name "Digimon Netplay" --behind-proxy
+Restart=always
+RestartSec=3
+DynamicUser=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
