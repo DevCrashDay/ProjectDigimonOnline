@@ -12,6 +12,7 @@ All credits for this amazing fan game goes to Draco74 https://withthewill.net/me
 
 Project Digimon is a Unity 2021.3 (Mono) platform fighter with up to 4 local players. The mod keeps that design and swaps the local controllers for networked ones:
 
+- **Server relay or direct P2P.** Matches go through the lobby server by default; the host can switch a room to direct UDP connections with automatic fallback to the server.
 - **Delay-based lockstep.** Every player's game runs the full battle. Each frame, every player's buttons are sent to everyone else and used a few frames later (the "input delay"), so all games see exactly the same inputs on the same frame. If someone's input is late, the game holds that frame until it arrives.
 - **Deterministic frames during a match.** Fixed 60 fps game time, the game's clocks replaced by a match clock, the random number generator reseeded every frame from a shared seed, and exactly one physics step and one `FixedUpdate` per frame.
 - **Rounds stay in sync.** Each round reloads the stage. Everyone loads it in the background and all players switch to it on the same simulation frame.
@@ -24,7 +25,7 @@ Pause is disabled online. Battles use the host's settings (rounds, items, hazard
 
 1. Close the game.
 2. Download `DigimonNetplay-Client.zip` from the [Releases](../../releases) page and extract it into the game folder, the one containing `ProjectDigimon.exe`. It adds BepInEx 5.4.23.2 (`winhttp.dll`, `doorstop_config.ini`, `BepInEx/`) and `BepInEx/plugins/DigimonNetplay/DigimonNetplay.dll`. It does not change any of the game's own files.
-3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.3.0 loaded`, and the main menu has an **ONLINE** entry.
+3. Start the game once. `BepInEx/LogOutput.log` should contain `Digimon Netplay 0.4.0 loaded`, and the main menu has an **ONLINE** entry.
 
 Everyone must use the same game version (1.16) and the same mod version.
 
@@ -71,10 +72,12 @@ In the online screen, open **Server settings** and click **Host on this PC**. Th
    - **Password**: listed with `[PW]`, players need the password.
    - **Private (code)**: not listed, friends join with the 5-letter room code (box at the top of the list).
 4. In the room, everyone picks a Digimon, color and evolution.
-5. The host picks the stage, rounds to win and input delay, then clicks **Start match**. Everyone goes to the VS screen together. While the match runs, the room shows "In match" and nobody else can join.
+5. The host picks the stage, rounds to win, input delay and the connection (below), then clicks **Start match**. Everyone goes to the VS screen together. While the match runs, the room shows "In match" and nobody else can join.
 6. After the battle, everyone is back at the main menu with the online screen open and still in the room; the host can start a rematch.
 
-The bottom-left HUD shows ping, input delay, how long the game waited for someone, and how many desyncs were corrected.
+**Connection:** by default every match runs through the lobby server, which hides players' IP addresses from each other and works on every network. The host can switch a room to **Direct (P2P)**: players then send their inputs straight to each other, which saves the trip through the server. Each player finds their public address through a public STUN server (Google or Cloudflare), the addresses are exchanged through the lobby server, and the games connect over UDP. Where a direct connection fails (some routers and mobile networks block it) or drops during a match, those players automatically use the server, and the match keeps going. The room list shows `[direct]` or `[via server]` next to each player. Direct links show each player's IP address to the others in the room. Players who don't want that untick **Allow a direct connection for me** and always go through the server.
+
+The bottom-left HUD shows ping, input delay, how long the game waited for someone, how many desyncs were corrected and, in P2P rooms, how many players are connected directly.
 
 **Input delay:** 2 to 3 frames is fine for players in the same region, 4 to 6 for long distances. If the game keeps pausing briefly, the host should raise it. The online screen suggests a value from your ping.
 
@@ -86,6 +89,7 @@ The bottom-left HUD shows ping, input delay, how long the game waited for someon
 |---|---|---|
 | LobbyServer | (empty) | Lobby server address; empty uses the official server built into the release |
 | HostPort | 7777 | Port for Host on this PC |
+| AllowP2P | true | Use direct connections in P2P rooms (shares your IP with that room) |
 | PlayerName | Tamer | Name shown to others |
 | LocalControls | K1,G1 | Which of the game's control sets drive your fighter online (K1/K2 keyboard layouts, G1..G6 gamepads), merged. Uses your rebinds from the game's options. |
 | DefaultInputDelay | 3 | Delay a new room starts with |
@@ -122,7 +126,7 @@ dotnet run --project tests/HookCheck -c Release -- "C:\Games\ProjectDIGIMON\Proj
 
 Layout:
 
-- `src/Shared`: wire protocol, relay server, relay client, lockstep core (no Unity dependency; used by mod, server and tests)
+- `src/Shared`: wire protocol, relay server, relay client, lockstep core, P2P links (no Unity dependency; used by mod, server and tests)
 - `src/Plugin`: BepInEx plugin (ONLINE main menu entry, online screen, match setup, frame gate, Harmony patches)
 - `src/Server`: standalone lobby and relay server
 - `deploy`: systemd service and Cloudflare Tunnel config for a Linux VPS

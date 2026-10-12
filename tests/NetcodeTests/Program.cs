@@ -30,6 +30,10 @@ internal static class Program
         Run("a player leaving aborts the match for the others", () => LeaveScenario(port));
         Run("lobby: room codes, full rooms, bad codes, version check", () => LobbyScenario(port));
         Run("lobby browser: public, password and private rooms, in-match rooms", () => BrowserScenario(port));
+        Run("P2P 1v1: direct links, delay 3, 2 rounds", () => Scenario(port, players: 2, delay: 3, segments: 2, framesPerSegment: 180, jitterMs: 6, injectDesync: false, p2p: new P2POptions()));
+        Run("P2P 4 players with 25% packet loss", () => Scenario(port, players: 4, delay: 3, segments: 2, framesPerSegment: 180, jitterMs: 6, injectDesync: false, p2p: new P2POptions { DropRate = 0.25 }));
+        Run("P2P link dies mid-match: falls back to the server", () => Scenario(port, players: 2, delay: 3, segments: 2, framesPerSegment: 240, jitterMs: 4, injectDesync: false, p2p: new P2POptions { CutAtFrame = 60 }));
+        Run("P2P with one player who turned direct connections off", () => Scenario(port, players: 3, delay: 3, segments: 1, framesPerSegment: 180, jitterMs: 4, injectDesync: false, p2p: new P2POptions { UdpOff = new[] { false, false, true, false } }));
         _webSocket = true;
         Run("WebSocket: 1v1, delay 3, 2 rounds", () => Scenario(port, players: 2, delay: 3, segments: 2, framesPerSegment: 180, jitterMs: 6, injectDesync: false));
         Run("WebSocket: 4 players, delay 2", () => Scenario(port, players: 4, delay: 2, segments: 1, framesPerSegment: 180, jitterMs: 8, injectDesync: false));
@@ -101,12 +105,21 @@ internal static class Program
         public float[] FinalPos;
         public int Desyncs, ChecksPassed;
         public long Stalls;
+        public int RelayedSeq; // P2P match messages that had to go through the server
         public string Error;
     }
 
-    private static void Scenario(int port, int players, int delay, int segments, int framesPerSegment, int jitterMs, bool injectDesync)
+    private sealed class P2POptions
+    {
+        public double DropRate;
+        public bool[] UdpOff = new bool[4];
+        public int CutAtFrame = -1; // both ends of the 0<->1 link go dead at this frame of round 1
+    }
+
+    private static void Scenario(int port, int players, int delay, int segments, int framesPerSegment, int jitterMs, bool injectDesync, P2POptions p2p = null)
     {
         var (clients, slots) = MakeRoom(port, players);
+        P2PMux[] muxes = p2p == null ? null : SetUpP2P(clients, slots, p2p);
         var cfg = new MatchConfig
         {
             Seed = 12345, InputDelay = delay, Stage = 1,
@@ -121,13 +134,14 @@ internal static class Program
             results[me] = new PeerResult();
             threads[me] = new Thread(() =>
             {
-                try { SimPeer(clients[me], cfg, me, segments, framesPerSegment, jitterMs, injectDesync && me == 1, results[me]); }
+                try { SimPeer(clients[me], cfg, me, segments, framesPerSegment, jitterMs, injectDesync && me == 1, results[me], muxes?[me], p2p, slots); }
                 catch (Exception e) { results[me].Error = e.ToString(); }
             });
             threads[me].Start();
         }
         foreach (var t in threads) Check(t.Join(120000), "peer thread hung");
         foreach (var c in clients) c.Dispose();
+        if (muxes != null) foreach (var m in muxes) m.Dispose();
 
         for (int i = 0; i < players; i++) Check(results[i].Error == null, "peer " + i + " failed: " + results[i].Error);
         for (int i = 1; i < players; i++)
@@ -147,7 +161,12 @@ internal static class Program
                 Check(results[i].ChecksPassed > 0, "no state checks ran on peer " + i);
             }
             Console.WriteLine("      " + results[0].FrameHashes.Count + " frames identical on " + players + " peers; scene switches at " + Fmt(results[0].Activations) +
-                              "; stalled frames per peer: " + string.Join(",", results.Select(r => r.Stalls)));
+                              "; stalled frames per peer: " + string.Join(",", results.Select(r => r.Stalls)) +
+                              (p2p != null ? "; match messages via server per peer: " + string.Join(",", results.Select(r => r.RelayedSeq)) : ""));
+            if (p2p != null && p2p.CutAtFrame < 0 && !p2p.UdpOff.Any(x => x))
+                Check(results.All(r => r.RelayedSeq == 0), "P2P match fell back to the server although every link was up");
+            if (p2p != null && (p2p.CutAtFrame >= 0 || p2p.UdpOff.Any(x => x)))
+                Check(results.Any(r => r.RelayedSeq > 0), "expected the server fallback to carry messages");
         }
         else
         {
@@ -162,9 +181,42 @@ internal static class Program
     private static string Fmt(List<(int seg, int frame)> a) => "[" + string.Join(" ", a.Select(x => x.seg + "@" + x.frame)) + "]";
 
     /// <summary>Mirrors MatchSession.OnFrame / LoadStage / OnSceneLoaded with a toy game instead of Unity.</summary>
-    private static void SimPeer(RelayClient client, MatchConfig cfg, int me, int segments, int framesPerSegment, int jitterMs, bool injectDesync, PeerResult res)
+    /// <summary>Like NetplayManager: every player announces itself, links get punched before the match starts.</summary>
+    private static P2PMux[] SetUpP2P(RelayClient[] clients, int[] slots, P2POptions o)
     {
-        var core = new LockstepCore(cfg, me, me == 0, client.Broadcast);
+        int n = clients.Length;
+        var muxes = new P2PMux[n];
+        for (int i = 0; i < n; i++)
+        {
+            muxes[i] = new P2PMux(slots[i], !o.UdpOff[i], clients[i].Broadcast, clients[i].Arrived) { StunServers = new string[0], DropRate = o.DropRate };
+            muxes[i].Announce();
+        }
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 3000)
+        {
+            for (int i = 0; i < n; i++)
+                while (clients[i].TryPoll(out var ev))
+                    if (ev is EvData d)
+                        using (var r = GameMsg.Open(d.Payload, out byte t))
+                            if (t == GameMsg.P2PHello) muxes[i].OnHello(d.FromSlot, r);
+            bool allUp = true;
+            for (int i = 0; i < n; i++)
+                for (int j = 0; j < n; j++)
+                    if (i != j && !o.UdpOff[i] && !o.UdpOff[j] && !muxes[i].IsDirect(slots[j])) allUp = false;
+            if (allUp) break;
+            Thread.Sleep(20);
+        }
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                if (i != j && !o.UdpOff[i] && !o.UdpOff[j]) Check(muxes[i].IsDirect(slots[j]), "no direct link from " + i + " to " + j);
+        return muxes;
+    }
+
+    private static void SimPeer(RelayClient client, MatchConfig cfg, int me, int segments, int framesPerSegment, int jitterMs, bool injectDesync, PeerResult res,
+        P2PMux mux = null, P2POptions p2p = null, int[] slots = null)
+    {
+        if (mux != null) mux.BeginMatch(cfg.Seed, cfg.Slots);
+        var core = new LockstepCore(cfg, me, me == 0, mux != null ? (Action<byte[]>)mux.Send : client.Broadcast);
         var rng = new Random(1000 + me);
         int n = cfg.PlayerCount;
         var pos = new float[n];
@@ -176,10 +228,22 @@ internal static class Program
         {
             while (client.TryPoll(out var ev))
             {
-                if (ev is EvData d) core.Handle(d.FromSlot, d.Payload);
+                if (ev is EvData d)
+                {
+                    if (mux != null)
+                    {
+                        using (var r = GameMsg.Open(d.Payload, out byte t))
+                        {
+                            if (t == GameMsg.Seq) { res.RelayedSeq++; mux.OnRelayed(d.FromSlot, r); continue; }
+                            if (t == GameMsg.P2PHello) { mux.OnHello(d.FromSlot, r); continue; }
+                        }
+                    }
+                    core.Handle(d.FromSlot, d.Payload);
+                }
                 else if (ev is EvPeerLeft pl) core.OnPeerLeft(pl.Slot);
                 else if (ev is EvDisconnected) core.Abort("disconnected", false);
             }
+            if (mux != null) while (mux.TryReceive(out int from, out byte[] payload)) core.Handle(from, payload);
         }
 
         // Background "scene load" that reports Ready after a random time, like LoadRoutine.
@@ -248,6 +312,7 @@ internal static class Program
                 if (pads[p].Has(PadState.Attack)) hp[(p + 1) % n] -= 0.001f;
             }
             if (injectDesync && core.Segment == 0 && core.Frame == 100) pos[0] += 1.5f;
+            if (p2p != null && core.Segment == 0 && core.Frame == p2p.CutAtFrame && me <= 1) mux.CutLink(slots[1 - me], true);
 
             res.FrameHashes[((long)core.Segment << 32) | (uint)core.Frame] = string.Join("|", pos.Select(x => x.ToString("R"))) + "/" + string.Join("|", hp.Select(x => x.ToString("R")));
 

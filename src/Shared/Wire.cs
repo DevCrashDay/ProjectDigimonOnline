@@ -8,7 +8,7 @@ namespace DigimonNetplay.Shared
     /// <summary>Message ids exchanged between a client and the relay server.</summary>
     public static class Msg
     {
-        public const int ProtocolVersion = 2;
+        public const int ProtocolVersion = 3;
 
         // server -> client
         public const byte Welcome = 1;      // int clientId, string serverName

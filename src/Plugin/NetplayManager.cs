@@ -15,6 +15,8 @@ namespace DigimonNetplay
 
         private RelayClient _client;
         private RelayServer _localServer;
+        private P2PMux _mux;                                                   // direct links, only in rooms with P2P on
+        private readonly Dictionary<int, byte[]> _hellos = new Dictionary<int, byte[]>(); // peers' P2P announcements
         private string _serverField, _hostPortField, _nameField, _codeField = "";
 
         // connecting happens on a worker thread so the game never freezes on a slow or dead server
@@ -121,6 +123,7 @@ namespace DigimonNetplay
 
         public void PumpNetwork()
         {
+            DrainDirect();
             if (_client == null) return;
             while (_client.TryPoll(out RelayEvent ev))
             {
@@ -137,11 +140,14 @@ namespace DigimonNetplay
                         break;
                     case EvPeerJoined pj:
                         _names[pj.Slot] = pj.Name;
+                        _mux?.Announce();
                         SendPick();
                         if (IsHost) BroadcastLobby();
                         break;
                     case EvPeerLeft pl:
                         _names.Remove(pl.Slot);
+                        _hellos.Remove(pl.Slot);
+                        _mux?.RemovePeer(pl.Slot);
                         _lobby.Picks.Remove(pl.Slot);
                         MatchSession.Current?.Core.OnPeerLeft(pl.Slot);
                         if (IsHost) BroadcastLobby();
@@ -174,6 +180,7 @@ namespace DigimonNetplay
                         return;
                 }
             }
+            DrainDirect();
         }
 
         private void HandleData(int from, byte[] payload)
@@ -198,6 +205,14 @@ namespace DigimonNetplay
                     case GameMsg.Start:
                         if (from != _hostSlot) break;
                         StartLocal(MatchConfig.Read(r));
+                        break;
+                    case GameMsg.P2PHello:
+                        _hellos[from] = payload;
+                        if (_mux != null) _mux.OnHello(from, r);
+                        break;
+                    case GameMsg.Seq:
+                        // A P2P match message that came through the server (fallback, or a player without direct links).
+                        EnsureMux().OnRelayed(from, r);
                         break;
                     case GameMsg.Ready:
                     case GameMsg.Input:
@@ -317,8 +332,41 @@ namespace DigimonNetplay
             LeaveRoomState();
         }
 
+        // ------------------------------------------------------------------ P2P
+
+        private P2PMux EnsureMux()
+        {
+            if (_mux != null) return _mux;
+            _mux = new P2PMux(_mySlot, Plugin.AllowP2P.Value, Broadcast, _client?.Arrived) { Log = m => Plugin.Log.LogInfo(m) };
+            _mux.StartDiscovery();
+            foreach (var kv in _hellos)
+                using (var r = GameMsg.Open(kv.Value, out _)) _mux.OnHello(kv.Key, r);
+            return _mux;
+        }
+
+        private void DropMux()
+        {
+            _mux?.Dispose();
+            _mux = null;
+        }
+
+        /// <summary>Direct links are set up while players wait in a P2P room, so they are ready when the match starts.</summary>
+        private void UpdateP2P()
+        {
+            bool want = _client != null && _inRoom && _lobby.P2P;
+            if (want && _mux == null) EnsureMux();
+            else if (!want && _mux != null && MatchSession.Current == null) DropMux();
+        }
+
+        private void DrainDirect()
+        {
+            while (_mux != null && _mux.TryReceive(out int from, out byte[] payload)) HandleData(from, payload);
+        }
+
         private void LeaveRoomState()
         {
+            DropMux();
+            _hellos.Clear();
             _inRoom = false; _roomCode = null; _roomName = null; _mySlot = -1; _nextListAt = 0; _names.Clear(); _lobby.Picks.Clear(); _early.Clear();
         }
 
@@ -349,6 +397,7 @@ namespace DigimonNetplay
                 Stage = stage,
                 Song = SoundManager.SONG_DEFAULT_STAGE,
                 BattleRoyale = slots.Count > 2,
+                P2P = _lobby.P2P,
                 Slots = slots.ToArray(),
                 Names = slots.Select(s => _names[s]).ToArray(),
                 Picks = slots.Select(s => _lobby.Picks[s].Clone()).ToArray(),
@@ -364,7 +413,14 @@ namespace DigimonNetplay
             if (me < 0) { Notify("A match started without you (the room was full)."); return; }
             var controls = Plugin.LocalControls.Value.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries);
             EnableGameInput(true);
-            MatchSession.Begin(cfg, me, IsHost, Broadcast, controls);
+            Action<byte[]> send = Broadcast;
+            if (cfg.P2P)
+            {
+                var mux = EnsureMux();
+                mux.BeginMatch(cfg.Seed, cfg.Slots);
+                send = mux.Send;
+            }
+            MatchSession.Begin(cfg, me, IsHost, send, controls);
             if (IsHost) { _client?.SetInMatch(true); _inMatchFlag = true; } // the lobby browser shows the room as busy
             foreach (var e in _early) MatchSession.Current?.Core.Handle(e.Key, e.Value);
             _early.Clear();
@@ -398,6 +454,7 @@ namespace DigimonNetplay
                 FrameGate.LastTickFrame = Time.frameCount;
             }
             FinishConnect();
+            UpdateP2P();
             if (MatchSession.Current == null) PumpNetwork();
             if (_inMatchFlag && MatchSession.Current == null) { _client?.SetInMatch(false); _inMatchFlag = false; }
             if (_show && _client != null && !_inRoom && _page == Page.Browser && Time.unscaledTime >= _nextListAt)
@@ -472,6 +529,11 @@ namespace DigimonNetplay
             string text = s.Status + "   ping " + (_rtt < 0 ? "?" : _rtt.ToString("0")) + " ms   delay " + c.Delay + "f";
             if (c.DesyncCount > 0) text += "   desyncs fixed " + c.DesyncCount;
             if (s.StallMs > 50) text += "   waiting " + s.StallMs.ToString("0") + " ms";
+            if (s.Core.Config.P2P && _mux != null)
+            {
+                var others = s.Core.Config.Slots.Where(x => x != _mySlot).ToList();
+                text += "   direct " + others.Count(_mux.IsDirect) + "/" + others.Count;
+            }
             GUI.Label(new Rect(10, OnlineSkin.CanvasHeight - 30, width - 20, 26), text, OnlineSkin.Hud);
         }
 
@@ -625,7 +687,8 @@ namespace DigimonNetplay
             {
                 _lobby.Picks.TryGetValue(kv.Key, out var p);
                 string pick = p == null ? "choosing..." : p.Character + " (color " + p.Color + (p.AltForm > 1 ? ", evo " + p.AltForm : "") + ")";
-                GUILayout.Label((kv.Key == _hostSlot ? "[Host] " : "") + kv.Value + (kv.Key == _mySlot ? " (you)" : "") + ": " + pick);
+                string link = !_lobby.P2P || kv.Key == _mySlot ? "" : _mux != null && _mux.IsDirect(kv.Key) ? "   [direct]" : "   [via server]";
+                GUILayout.Label((kv.Key == _hostSlot ? "[Host] " : "") + kv.Value + (kv.Key == _mySlot ? " (you)" : "") + ": " + pick + link);
             }
             if (inMatch)
             {
@@ -638,6 +701,7 @@ namespace DigimonNetplay
             DrawPicker();
 
             GUILayout.Space(6);
+            DrawConnectionChoice();
             if (IsHost)
             {
                 GUILayout.Label("Stage: " + GameBridge.StageLabel(_lobby.Stage));
@@ -667,6 +731,29 @@ namespace DigimonNetplay
             }
             GUILayout.Space(6);
             if (GUILayout.Button("Leave room")) { _client.LeaveRoom(); LeaveRoomState(); }
+        }
+
+        private static readonly string[] ConnectionChoices = { "Through the server", "Direct (P2P)" };
+
+        private void DrawConnectionChoice()
+        {
+            if (IsHost)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("Connection", GUILayout.Width(140));
+                int pick = GUILayout.Toolbar(_lobby.P2P ? 1 : 0, ConnectionChoices);
+                GUILayout.EndHorizontal();
+                if ((pick == 1) != _lobby.P2P) { _lobby.P2P = pick == 1; BroadcastLobby(); }
+            }
+            else GUILayout.Label("Connection: " + (_lobby.P2P ? "direct (P2P)" : "through the server"));
+            if (!_lobby.P2P) return;
+            GUILayout.Label("Players connect directly where their networks allow it and use the server otherwise. Direct links show each player's IP address to the others in this room.", OnlineSkin.Small);
+            bool allow = GUILayout.Toggle(Plugin.AllowP2P.Value, "  Allow a direct connection for me");
+            if (allow != Plugin.AllowP2P.Value)
+            {
+                Plugin.AllowP2P.Value = allow;
+                DropMux(); // rebuilt next frame with the new setting
+            }
         }
 
         private static int SuggestedDelay(double rttMs) => Mathf.Clamp(Mathf.CeilToInt((float)rttMs / 16.7f) + 1, 1, 12);

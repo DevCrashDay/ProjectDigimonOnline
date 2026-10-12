@@ -62,6 +62,7 @@ namespace DigimonNetplay.Shared
         public int Stage;
         public int Song;
         public bool BattleRoyale;
+        public bool P2P;                           // send match messages directly between players where possible
         public int[] Slots = new int[0];          // network slot of game player 0..n-1
         public string[] Names = new string[0];
         public PlayerPick[] Picks = new PlayerPick[0];
@@ -78,6 +79,7 @@ namespace DigimonNetplay.Shared
             for (int i = 0; i < Slots.Length; i++) { w.Write((byte)Slots[i]); w.Write(Names[i] ?? ""); Picks[i].Write(w); }
             w.Write(Settings.Count);
             foreach (var kv in Settings) { w.Write(kv.Key); w.Write(kv.Value ?? ""); }
+            w.Write(P2P);
         }
 
         public static MatchConfig Read(BinaryReader r)
@@ -88,6 +90,7 @@ namespace DigimonNetplay.Shared
             for (int i = 0; i < n; i++) { c.Slots[i] = r.ReadByte(); c.Names[i] = r.ReadString(); c.Picks[i] = PlayerPick.Read(r); }
             int s = r.ReadInt32();
             for (int i = 0; i < s; i++) c.Settings[r.ReadString()] = r.ReadString();
+            c.P2P = r.ReadBoolean();
             return c;
         }
     }
@@ -112,6 +115,8 @@ namespace DigimonNetplay.Shared
         public const byte Input = 5;       // int segment, int frame, PadState
         public const byte StateCheck = 6;  // int segment, int frame, entries (host -> all)
         public const byte Abort = 7;       // string reason
+        public const byte P2PHello = 8;    // byte[8] token, byte count, count x "ip:port" (how to reach me directly)
+        public const byte Seq = 9;         // int matchId, int seq, bytes payload (a P2P match message sent via the relay)
 
         public static byte[] Build(byte type, Action<BinaryWriter> body = null)
         {
@@ -138,6 +143,7 @@ namespace DigimonNetplay.Shared
         public int Stage;
         public int InputDelay = 3;
         public int Rounds = 1;
+        public bool P2P;
         public Dictionary<int, PlayerPick> Picks = new Dictionary<int, PlayerPick>();
 
         public void Write(BinaryWriter w)
@@ -145,6 +151,7 @@ namespace DigimonNetplay.Shared
             w.Write(Stage); w.Write((byte)InputDelay); w.Write((byte)Rounds);
             w.Write((byte)Picks.Count);
             foreach (var kv in Picks) { w.Write((byte)kv.Key); kv.Value.Write(w); }
+            w.Write(P2P);
         }
 
         public static LobbyInfo Read(BinaryReader r)
@@ -152,6 +159,7 @@ namespace DigimonNetplay.Shared
             var l = new LobbyInfo { Stage = r.ReadInt32(), InputDelay = r.ReadByte(), Rounds = r.ReadByte() };
             int n = r.ReadByte();
             for (int i = 0; i < n; i++) { int slot = r.ReadByte(); l.Picks[slot] = PlayerPick.Read(r); }
+            l.P2P = r.ReadBoolean();
             return l;
         }
     }

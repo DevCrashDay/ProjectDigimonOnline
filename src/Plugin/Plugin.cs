@@ -11,7 +11,7 @@ namespace DigimonNetplay
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "community.projectdigimon.netplay";
-        public const string Version = "0.3.0";
+        public const string Version = "0.4.0";
 
         /// <summary>Lobby server used when the config leaves LobbyServer empty.</summary>
         public const string OfficialServer = "";
@@ -19,6 +19,7 @@ namespace DigimonNetplay
         internal static ManualLogSource Log;
         internal static ConfigEntry<string> LobbyServer;
         internal static ConfigEntry<int> HostPort;
+        internal static ConfigEntry<bool> AllowP2P;
         internal static ConfigEntry<string> PlayerName;
         internal static ConfigEntry<string> LocalControls;
         internal static ConfigEntry<int> DefaultInputDelay;
@@ -29,6 +30,7 @@ namespace DigimonNetplay
         {
             Log = Logger;
             LobbyServer = Config.Bind("Connection", "LobbyServer", "", "Lobby server. Empty = the official server. wss://your.domain for a server behind Cloudflare/HTTPS, ws://host:port for plain WebSocket, host:port for a direct TCP connection.");
+            AllowP2P = Config.Bind("Connection", "AllowP2P", true, "In rooms set to Direct (P2P), connect straight to the other players (they see your IP address). Off = always go through the server.");
             HostPort = Config.Bind("Connection", "HostPort", 7777, "TCP port used by \"Host on this PC\".");
             PlayerName = Config.Bind("Connection", "PlayerName", "Tamer", "Name shown to other players.");
             LocalControls = Config.Bind("Input", "LocalControls", "K1,G1", "Which of the game's control sets drive your fighter online, comma separated (K1, K2 = keyboard layouts, G1..G6 = gamepads). They are merged.");
