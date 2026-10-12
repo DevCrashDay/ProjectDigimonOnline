@@ -11,7 +11,7 @@ namespace DigimonNetplay
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "community.projectdigimon.netplay";
-        public const string Version = "0.4.0";
+        public const string Version = Shared.BuildInfo.Version;
 
         /// <summary>Lobby server used when the config leaves LobbyServer empty.</summary>
         public const string OfficialServer = "";

@@ -60,26 +60,30 @@ namespace DigimonNetplay
         }
         public string Status { get; private set; } = "Loading";
 
-        private MatchSession(MatchConfig cfg, int localPlayer, bool isHost, Action<byte[]> broadcast, string[] localControls)
+        /// <summary>Watching only: no local input, never holds anyone up.</summary>
+        public bool IsSpectator => Core.IsSpectator;
+
+        private MatchSession(MatchConfig cfg, int localPlayer, bool isHost, int hostSlot, Action<byte[]> broadcast, string[] localControls)
         {
             _broadcast = broadcast;
             _localControls = localControls;
-            Core = new LockstepCore(cfg, localPlayer, isHost, broadcast) { Log = m => Plugin.Log.LogInfo(m) };
+            Core = new LockstepCore(cfg, localPlayer, isHost, broadcast) { Log = m => Plugin.Log.LogInfo(m), HostSlot = hostSlot };
             int n = cfg.PlayerCount;
             _pads = new PadState[n];
             _prevPads = new PadState[n];
             _scratch = new PadState[n];
         }
 
-        public static void Begin(MatchConfig cfg, int localPlayer, bool isHost, Action<byte[]> broadcast, string[] localControls)
+        /// <param name="localPlayer">This peer's player index, or -1 to watch.</param>
+        public static void Begin(MatchConfig cfg, int localPlayer, bool isHost, int hostSlot, Action<byte[]> broadcast, string[] localControls)
         {
             Current?.End(null);
-            var s = new MatchSession(cfg, localPlayer, isHost, broadcast, localControls);
+            var s = new MatchSession(cfg, localPlayer, isHost, hostSlot, broadcast, localControls);
             Current = s;
             NetClock.Reset();
             s.EnterDeterministicMode();
             GameBridge.SaveLocalState();
-            Plugin.Log.LogInfo("Starting online match: " + string.Join(" vs ", cfg.Picks.Select(p => p.Character).ToArray()) + " on " + GameBridge.StageLabel(cfg.Stage) + ", delay " + cfg.InputDelay);
+            Plugin.Log.LogInfo((localPlayer < 0 ? "Watching online match: " : "Starting online match: ") + string.Join(" vs ", cfg.Picks.Select(p => p.Character).ToArray()) + " on " + GameBridge.StageLabel(cfg.Stage) + ", delay " + cfg.InputDelay);
             GameBridge.LaunchBattle(cfg);
         }
 
@@ -118,11 +122,9 @@ namespace DigimonNetplay
             GameBridge.RestoreLocalState();
             if (Current == this) Current = null;
             Plugin.Log.LogInfo(abortReason == null ? "Online match finished." : "Online match ended: " + abortReason);
-            if (abortReason != null)
-            {
-                NetplayManager.Instance?.Notify(abortReason);
-                GameBridge.BailToMainMenu();
-            }
+            try { NetplayManager.Instance?.OnMatchEnded(this, abortReason); }
+            catch (Exception e) { Plugin.Log.LogError("After the match: " + e); }
+            if (abortReason != null) GameBridge.BailToMainMenu();
         }
 
         // ------------------------------------------------------------------ scene switching
@@ -218,7 +220,16 @@ namespace DigimonNetplay
             if (_loadOp != null && Core.Gating) TryActivate();
             if (!Core.Gating) return;
 
-            if (!_submittedThisFrame)
+            if (Core.MustHold(_loadingSegment))
+            {
+                // Spectator whose next stage is still loading: the old scene stands still until it is ready.
+                Status = "Loading " + (_loadingScene ?? "");
+                for (int i = 0; i < _pads.Length; i++) { _pads[i] = default(PadState); _prevPads[i] = default(PadState); }
+                Time.timeScale = 0f;
+                return;
+            }
+
+            if (!_submittedThisFrame && !Core.IsSpectator)
             {
                 Core.SubmitLocal(GameBridge.SampleLocal(_localControls));
                 _submittedThisFrame = true;

@@ -117,6 +117,10 @@ namespace DigimonNetplay.Shared
         public const byte Abort = 7;       // string reason
         public const byte P2PHello = 8;    // byte[8] token, byte count, count x "ip:port" (how to reach me directly)
         public const byte Seq = 9;         // int matchId, int seq, bytes payload (a P2P match message sent via the relay)
+        public const byte LobbyReady = 10; // bool ready (player -> host, who shares it in LobbyInfo)
+        public const byte Chat = 11;       // string text
+        public const byte PingInfo = 12;   // short serverRttMs, byte count, count x (byte slot, short directRttMs) (for automatic input delay)
+        public const int MaxChat = 120;
 
         public static byte[] Build(byte type, Action<BinaryWriter> body = null)
         {
@@ -142,9 +146,13 @@ namespace DigimonNetplay.Shared
     {
         public int Stage;
         public int InputDelay = 3;
+        public bool AutoDelay = true;               // host picks the delay from everyone's measured ping
         public int Rounds = 1;
         public bool P2P;
         public Dictionary<int, PlayerPick> Picks = new Dictionary<int, PlayerPick>();
+        public HashSet<int> Ready = new HashSet<int>();                     // slots that pressed Ready
+        public Dictionary<int, int> Wins = new Dictionary<int, int>();      // matches won in this room, by slot
+        public int Matches;                                                 // matches finished in this room
 
         public void Write(BinaryWriter w)
         {
@@ -152,6 +160,12 @@ namespace DigimonNetplay.Shared
             w.Write((byte)Picks.Count);
             foreach (var kv in Picks) { w.Write((byte)kv.Key); kv.Value.Write(w); }
             w.Write(P2P);
+            w.Write(AutoDelay);
+            w.Write((byte)Ready.Count);
+            foreach (int s in Ready) w.Write((byte)s);
+            w.Write((byte)Wins.Count);
+            foreach (var kv in Wins) { w.Write((byte)kv.Key); w.Write(kv.Value); }
+            w.Write(Matches);
         }
 
         public static LobbyInfo Read(BinaryReader r)
@@ -160,7 +174,39 @@ namespace DigimonNetplay.Shared
             int n = r.ReadByte();
             for (int i = 0; i < n; i++) { int slot = r.ReadByte(); l.Picks[slot] = PlayerPick.Read(r); }
             l.P2P = r.ReadBoolean();
+            l.AutoDelay = r.ReadBoolean();
+            n = r.ReadByte();
+            for (int i = 0; i < n; i++) l.Ready.Add(r.ReadByte());
+            n = r.ReadByte();
+            for (int i = 0; i < n; i++) { int slot = r.ReadByte(); l.Wins[slot] = r.ReadInt32(); }
+            l.Matches = r.ReadInt32();
             return l;
+        }
+
+        /// <summary>
+        /// Input delay that hides the worst one-way latency between any two players. <paramref name="serverRtt"/> is each
+        /// player's round trip to the server; <paramref name="directRtt"/> holds round trips of live direct links.
+        /// </summary>
+        public static int AutoDelayFor(IList<int> slots, IDictionary<int, double> serverRtt, Func<int, int, double> directRtt)
+        {
+            double worst = 0;
+            for (int i = 0; i < slots.Count; i++)
+                for (int j = i + 1; j < slots.Count; j++)
+                {
+                    int a = slots[i], b = slots[j];
+                    double d = directRtt(a, b);
+                    double oneWay;
+                    if (d > 0) oneWay = d / 2;
+                    else
+                    {
+                        serverRtt.TryGetValue(a, out double ra);
+                        serverRtt.TryGetValue(b, out double rb);
+                        oneWay = (ra + rb) / 2; // a -> server -> b
+                    }
+                    worst = Math.Max(worst, oneWay);
+                }
+            int frames = (int)Math.Ceiling(worst / (1000.0 / 60.0)) + 1;
+            return Math.Max(1, Math.Min(10, frames));
         }
     }
 }

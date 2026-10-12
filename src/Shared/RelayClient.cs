@@ -10,16 +10,24 @@ namespace DigimonNetplay.Shared
 {
     /// <summary>Events produced by <see cref="RelayClient"/>, drained on the game thread with TryPoll.</summary>
     public abstract class RelayEvent { }
-    public sealed class EvWelcome : RelayEvent { public int ClientId; public string ServerName; }
+    public sealed class EvWelcome : RelayEvent { public int ClientId; public string ServerName, LatestVersion, DownloadUrl; }
     public sealed class EvRoomJoined : RelayEvent
     {
         public string Code, Name;
         public int MySlot, HostSlot, MaxPlayers;
         public byte Visibility;
-        public bool HasPassword;
+        public bool HasPassword, Ranked;
     }
     public sealed class EvRoomList : RelayEvent { public int PlayersOnline; public RoomInfo[] Rooms; }
-    public sealed class EvPeerJoined : RelayEvent { public int Slot; public string Name; }
+    public sealed class EvPeerJoined : RelayEvent { public int Slot; public string Name; public int Rating; }
+    public sealed class EvHostChanged : RelayEvent { public int HostSlot; }
+    public sealed class EvRoomUpdated : RelayEvent { public int MaxPlayers; public string Name; public byte Visibility; public bool HasPassword; }
+    public sealed class EvRoomLeft : RelayEvent { public string Reason; }
+    public sealed class EvReportSaved : RelayEvent { public string Id; }
+    public sealed class EvAccount : RelayEvent { public string Display; public int Rating, Wins, Losses, Rank; }
+    public sealed class EvQueue : RelayEvent { public bool Searching; public int Seconds, PlayersSearching; }
+    public sealed class EvRatingChanged : RelayEvent { public int OldRating, NewRating, Result; public string Opponent; }
+    public sealed class EvLeaderboard : RelayEvent { public LeaderRow[] Rows; }
     public sealed class EvPeerLeft : RelayEvent { public int Slot; }
     public sealed class EvError : RelayEvent { public string Text; }
     public sealed class EvData : RelayEvent { public int FromSlot; public byte[] Payload; }
@@ -47,6 +55,12 @@ namespace DigimonNetplay.Shared
         /// <summary>Blocking. Raw TCP to host:port.</summary>
         public void Connect(string host, int port, string playerName, int timeoutMs = 5000) =>
             Connect(new ServerAddress { Host = host, Port = port }, playerName, timeoutMs);
+
+        /// <summary>Secret that identifies this player's ranked account (sent in Hello). Empty = no account.</summary>
+        public string AccountToken = "";
+        public string ModVersion = BuildInfo.Version;
+        /// <summary>Tests only: pretend to speak another protocol version.</summary>
+        public int Protocol = Msg.ProtocolVersion;
 
         /// <summary>Blocking. Address forms: "wss://lobby.example.com", "ws://host:port/path", "host:port", "host".</summary>
         public void Connect(string address, string playerName, int timeoutMs = 8000) =>
@@ -87,14 +101,27 @@ namespace DigimonNetplay.Shared
             _open = true;
             _reader = new Thread(ReadLoop) { IsBackground = true, Name = "netplay-reader" };
             _reader.Start();
-            Send(Wire.Build(Msg.Hello, w => { w.Write(Msg.ProtocolVersion); w.Write(playerName ?? ""); }));
+            Send(Wire.Build(Msg.Hello, w => { w.Write(Protocol); w.Write(playerName ?? ""); w.Write(ModVersion ?? ""); w.Write(AccountToken ?? ""); }));
         }
 
         public void CreateRoom(int maxPlayers, string name = "", byte visibility = RoomVisibility.Public, string password = "") =>
             Send(Wire.Build(Msg.Create, w => { w.Write((byte)maxPlayers); w.Write(name ?? ""); w.Write(visibility); w.Write(password ?? ""); }));
-        public void JoinRoom(string code, string password = "") => Send(Wire.Build(Msg.Join, w => { w.Write(code ?? ""); w.Write(password ?? ""); }));
+        public void JoinRoom(string code, string password = "", bool spectate = false) =>
+            Send(Wire.Build(Msg.Join, w => { w.Write(code ?? ""); w.Write(password ?? ""); w.Write(spectate); }));
+        public void QuickMatch() => Send(Wire.Build(Msg.QuickMatch));
         public void ListRooms() => Send(Wire.Build(Msg.ListRooms));
-        public void SetInMatch(bool inMatch) => Send(Wire.Build(Msg.SetInMatch, w => w.Write(inMatch)));
+        public void SetInMatch(bool inMatch, int matchId = 0) => Send(Wire.Build(Msg.SetInMatch, w => { w.Write(inMatch); w.Write(matchId); }));
+        public void Kick(int slot) => Send(Wire.Build(Msg.Kick, w => w.Write((byte)slot)));
+        public void UpdateRoom(int maxPlayers, string name, byte visibility, bool changePassword, string password) =>
+            Send(Wire.Build(Msg.UpdateRoom, w => { w.Write((byte)maxPlayers); w.Write(name ?? ""); w.Write(visibility); w.Write(changePassword); w.Write(password ?? ""); }));
+        public void SendReport(string description, byte[] gzippedLog) =>
+            Send(Wire.Build(Msg.Report, w => { w.Write(description ?? ""); w.Write(ModVersion ?? ""); Wire.WriteBytes(w, gzippedLog); }));
+        public void QueueRanked() => Send(Wire.Build(Msg.QueueRanked));
+        public void CancelQueue() => Send(Wire.Build(Msg.CancelQueue));
+        public void ReportResult(int matchId, int winnerSlot) => Send(Wire.Build(Msg.MatchResult, w => { w.Write(matchId); w.Write((byte)winnerSlot); }));
+        public void GetLeaderboard() => Send(Wire.Build(Msg.GetLeaderboard));
+        /// <summary>Forward a payload to the room's spectators only.</summary>
+        public void SendToSpectators(byte[] payload) => Send(Wire.Build(Msg.RelaySpectators, w => Wire.WriteBytes(w, payload)));
         public void LeaveRoom() => Send(Wire.Build(Msg.Leave));
         public void Ping() => Send(Wire.Build(Msg.Ping, w => w.Write(DateTime.UtcNow.Ticks)));
 
@@ -146,12 +173,17 @@ namespace DigimonNetplay.Shared
             {
                 switch (type)
                 {
-                    case Msg.Welcome: return new EvWelcome { ClientId = r.ReadInt32(), ServerName = r.ReadString() };
+                    case Msg.Welcome:
+                        return new EvWelcome
+                        {
+                            ClientId = r.ReadInt32(), ServerName = r.ReadString(),
+                            LatestVersion = More(r) ? r.ReadString() : "", DownloadUrl = More(r) ? r.ReadString() : "",
+                        };
                     case Msg.RoomJoined:
                         return new EvRoomJoined
                         {
                             Code = r.ReadString(), MySlot = r.ReadByte(), HostSlot = r.ReadByte(), MaxPlayers = r.ReadByte(),
-                            Name = r.ReadString(), Visibility = r.ReadByte(), HasPassword = r.ReadBoolean(),
+                            Name = r.ReadString(), Visibility = r.ReadByte(), HasPassword = r.ReadBoolean(), Ranked = r.ReadBoolean(),
                         };
                     case Msg.RoomList:
                     {
@@ -162,7 +194,22 @@ namespace DigimonNetplay.Shared
                         for (int i = 0; i < n; i++) ev.Rooms[i] = RoomInfo.Read(r);
                         return ev;
                     }
-                    case Msg.PeerJoined: return new EvPeerJoined { Slot = r.ReadByte(), Name = r.ReadString() };
+                    case Msg.PeerJoined: return new EvPeerJoined { Slot = r.ReadByte(), Name = r.ReadString(), Rating = r.ReadInt32() };
+                    case Msg.HostChanged: return new EvHostChanged { HostSlot = r.ReadByte() };
+                    case Msg.RoomUpdated: return new EvRoomUpdated { MaxPlayers = r.ReadByte(), Name = r.ReadString(), Visibility = r.ReadByte(), HasPassword = r.ReadBoolean() };
+                    case Msg.RoomLeft: return new EvRoomLeft { Reason = r.ReadString() };
+                    case Msg.ReportSaved: return new EvReportSaved { Id = r.ReadString() };
+                    case Msg.AccountInfo: return new EvAccount { Display = r.ReadString(), Rating = r.ReadInt32(), Wins = r.ReadInt32(), Losses = r.ReadInt32(), Rank = r.ReadInt32() };
+                    case Msg.QueueStatus: return new EvQueue { Searching = r.ReadBoolean(), Seconds = r.ReadInt32(), PlayersSearching = r.ReadInt32() };
+                    case Msg.RatingChanged: return new EvRatingChanged { OldRating = r.ReadInt32(), NewRating = r.ReadInt32(), Result = r.ReadByte(), Opponent = r.ReadString() };
+                    case Msg.Leaderboard:
+                    {
+                        int n = r.ReadInt32();
+                        if (n < 0 || n > 1000) throw new IOException("bad leaderboard");
+                        var rows = new LeaderRow[n];
+                        for (int i = 0; i < n; i++) rows[i] = LeaderRow.Read(r);
+                        return new EvLeaderboard { Rows = rows };
+                    }
                     case Msg.PeerLeft: return new EvPeerLeft { Slot = r.ReadByte() };
                     case Msg.Error: return new EvError { Text = r.ReadString() };
                     case Msg.Relayed: return new EvData { FromSlot = r.ReadByte(), Payload = Wire.ReadBytes(r) };
@@ -171,6 +218,8 @@ namespace DigimonNetplay.Shared
                 }
             }
         }
+
+        private static bool More(BinaryReader r) => r.BaseStream.Position < r.BaseStream.Length;
 
         private void Close(string reason)
         {

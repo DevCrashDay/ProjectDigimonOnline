@@ -38,6 +38,8 @@ namespace DigimonNetplay.Shared
             public IPEndPoint Ep;
             public bool Up;
             public long LastHeard, LastProbe;
+            public double Rtt = -1;          // smoothed round trip of probe -> ack, ms
+            public long ProbeSentAt;
             public bool Cut; // tests: simulate a dead link
         }
 
@@ -60,6 +62,11 @@ namespace DigimonNetplay.Shared
         public readonly bool UdpEnabled;
         public string[] StunServers = { "stun.l.google.com:19302", "stun.cloudflare.com:3478" };
         public Action<string> Log = _ => { };
+        /// <summary>
+        /// Sends a match message to the room's spectators through the server. Spectators never get direct links, so
+        /// anything that went only over direct links is also handed to them this way.
+        /// </summary>
+        public Action<byte[]> SpectatorBroadcast;
         /// <summary>Tests only: fraction of outgoing UDP packets to drop.</summary>
         public double DropRate;
 
@@ -218,6 +225,12 @@ namespace DigimonNetplay.Shared
             lock (_lock) return _peers.TryGetValue(slot, out var p) && p.Up;
         }
 
+        /// <summary>Measured round trip of the direct link to <paramref name="slot"/> in ms, or -1 without a live link.</summary>
+        public double DirectRtt(int slot)
+        {
+            lock (_lock) return _peers.TryGetValue(slot, out var p) && p.Up ? p.Rtt : -1;
+        }
+
         /// <summary>Tests only: make a link look dead (or alive again).</summary>
         public void CutLink(int slot, bool cut)
         {
@@ -254,7 +267,8 @@ namespace DigimonNetplay.Shared
                 }
                 if (direct.Count > 0) _pending.Add(p);
             }
-            if (needRelay) _relayBroadcast(Wrap(p));
+            if (needRelay) _relayBroadcast(Wrap(p));      // the relay also reaches spectators
+            else SpectatorBroadcast?.Invoke(Wrap(p));
             foreach (var peer in direct) SendData(peer);
         }
 
@@ -376,6 +390,11 @@ namespace DigimonNetplay.Shared
                     if (!_peers.TryGetValue(slot, out peer) || !peer.Token.SequenceEqual(token) || peer.Cut) return;
                     peer.Ep = from; // also follows the peer's NAT if its port changes
                     peer.LastHeard = Now;
+                    if (type == TProbeAck && peer.ProbeSentAt > 0)
+                    {
+                        double sample = Now - peer.ProbeSentAt;
+                        peer.Rtt = peer.Rtt < 0 ? sample : peer.Rtt * 0.8 + sample * 0.2;
+                    }
                     if ((type == TProbeAck || type == TData) && !peer.Up)
                     {
                         peer.Up = true;
@@ -474,6 +493,7 @@ namespace DigimonNetplay.Shared
                         if (now - peer.LastProbe >= (peer.Up ? KeepAliveMs : ProbeIntervalMs))
                         {
                             peer.LastProbe = now;
+                            peer.ProbeSentAt = now;
                             if (peer.Up) probes.Add(new KeyValuePair<Peer, IPEndPoint>(peer, peer.Ep));
                             else
                             {

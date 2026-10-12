@@ -8,7 +8,7 @@ namespace DigimonNetplay
     {
         public const float CanvasHeight = 720f;
 
-        public static GUIStyle Panel, Title, Hint, Hud, Notice, Heading, Small, Warn, Link, Row;
+        public static GUIStyle Panel, Title, Hint, Hud, Notice, Heading, Small, Warn, Link, Row, Selected, Tiny;
         public static Texture2D Dim;
 
         private static GUISkin _skin;
@@ -79,7 +79,13 @@ namespace DigimonNetplay
             Link.normal.textColor = accent;
             Link.hover.textColor = Color.white;
             Row = new GUIStyle { normal = { background = Tex(new Color(1f, 1f, 1f, 0.06f)) }, margin = new RectOffset(0, 0, 2, 2), padding = new RectOffset(6, 6, 2, 2) };
+            Selected = new GUIStyle(Row) { normal = { background = Tex(accent) } };
+            Tiny = new GUIStyle(_skin.label) { fontSize = 13, alignment = TextAnchor.MiddleCenter, wordWrap = true };
+            Tiny.normal.textColor = new Color(0.8f, 0.85f, 0.95f);
             Dim = Tex(new Color(0f, 0f, 0f, 0.6f));
+            // Player names and chat are shown as typed, never as markup.
+            foreach (var st in new[] { _skin.label, _skin.button, _skin.textField, _skin.box, Title, Hint, Hud, Notice, Heading, Small, Warn, Link, Tiny })
+                st.richText = false;
         }
 
         private static void Style(GUIStyle s, int size, Color text, Texture2D bg)

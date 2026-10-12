@@ -25,10 +25,13 @@ namespace DigimonNetplay.Shared
         private readonly Dictionary<long, List<StateEntry>> _localChecks = new Dictionary<long, List<StateEntry>>();
         private readonly Dictionary<long, List<StateEntry>> _hostChecks = new Dictionary<long, List<StateEntry>>();
         private readonly List<StateEntry> _pendingCorrection = new List<StateEntry>();
+        private readonly HashSet<int> _spectatorLoaded = new HashSet<int>();
 
         public MatchConfig Config { get; }
         public int LocalPlayer { get; }
         public bool IsHost { get; }
+        /// <summary>A spectator (LocalPlayer -1) only watches: it sends nothing and the players never wait for it.</summary>
+        public bool IsSpectator => LocalPlayer < 0;
         public int Delay => Config.InputDelay;
         public int Players => Config.PlayerCount;
 
@@ -50,6 +53,9 @@ namespace DigimonNetplay.Shared
             for (int i = 0; i < _inputs.Length; i++) _inputs[i] = new Dictionary<long, PadState>();
         }
 
+        /// <summary>Slot of the match host (whoever started it); its state checks are the reference.</summary>
+        public int HostSlot = -1;
+
         private static long Key(int segment, int frame) => ((long)segment << 32) | (uint)frame;
 
         // ---------------------------------------------------------------- scene switching
@@ -57,6 +63,7 @@ namespace DigimonNetplay.Shared
         /// <summary>The local peer has the scene for <paramref name="segment"/> loaded in the background.</summary>
         public void LocalLoadReady(int segment)
         {
+            if (IsSpectator) { _spectatorLoaded.Add(segment); return; }
             int frame = Gating ? Frame : -1;
             NoteReady(segment, LocalPlayer, frame);
             _broadcast(GameMsg.Build(GameMsg.Ready, w => { w.Write(segment); w.Write(frame); }));
@@ -86,9 +93,21 @@ namespace DigimonNetplay.Shared
         {
             int? a = ActivationFrame(segment);
             if (a == null) return false;
+            if (IsSpectator && !_spectatorLoaded.Contains(segment)) return false;
             if (!Gating || a.Value < 0) return true;
             if (Frame > a.Value) Log("activation frame " + a.Value + " already passed (at " + Frame + ")");
             return Frame >= a.Value;
+        }
+
+        /// <summary>
+        /// Spectators load at their own pace: when the players switch scenes on a frame the spectator reaches before its
+        /// own load is done, it has to stand still on that frame (the players' inputs for the old scene end there).
+        /// </summary>
+        public bool MustHold(int segment)
+        {
+            if (!IsSpectator || _spectatorLoaded.Contains(segment)) return false;
+            int? a = ActivationFrame(segment);
+            return a != null && a.Value >= 0 && Gating && Frame >= a.Value;
         }
 
         /// <summary>The new stage scene is live; start counting frames for it.</summary>
@@ -98,6 +117,7 @@ namespace DigimonNetplay.Shared
             Frame = 0;
             Gating = true;
             _ready.Remove(segment);
+            _spectatorLoaded.Remove(segment);
             Prune();
         }
 
@@ -109,6 +129,7 @@ namespace DigimonNetplay.Shared
         /// <summary>Local input sampled this frame; it will be used at Frame + Delay.</summary>
         public void SubmitLocal(PadState pad)
         {
+            if (IsSpectator) return;
             int seg = Segment, target = Frame + Delay;
             _inputs[LocalPlayer][Key(seg, target)] = pad;
             _broadcast(GameMsg.Build(GameMsg.Input, w => { w.Write(seg); w.Write(target); pad.Write(w); }));
@@ -220,7 +241,7 @@ namespace DigimonNetplay.Shared
         {
             if (AbortReason != null) return;
             AbortReason = reason;
-            if (tellOthers) _broadcast(GameMsg.Build(GameMsg.Abort, w => w.Write(reason)));
+            if (tellOthers && !IsSpectator) _broadcast(GameMsg.Build(GameMsg.Abort, w => w.Write(reason)));
         }
 
         public void OnPeerLeft(int slot)
@@ -252,6 +273,7 @@ namespace DigimonNetplay.Shared
                     }
                     case GameMsg.StateCheck:
                     {
+                        if (player < 0 || (HostSlot >= 0 && fromSlot != HostSlot)) return true; // only the host's checks count
                         int seg = r.ReadInt32(), frame = r.ReadInt32(), n = r.ReadInt32();
                         var list = new List<StateEntry>(n);
                         for (int i = 0; i < n; i++) list.Add(StateEntry.Read(r));
@@ -261,6 +283,7 @@ namespace DigimonNetplay.Shared
                         return true;
                     }
                     case GameMsg.Abort:
+                        if (player < 0) return true; // only players can end a match
                         Abort(r.ReadString(), false);
                         return true;
                     default:

@@ -15,7 +15,7 @@ namespace DigimonNetplay.Shared
     public sealed class WsStream : Stream
     {
         private const string Guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        private const int MaxMessage = 256 * 1024;
+        private const int MaxMessage = 320 * 1024;
 
         private readonly Stream _inner;
         private readonly bool _client;   // clients mask what they send

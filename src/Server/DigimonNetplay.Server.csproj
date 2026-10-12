@@ -11,5 +11,7 @@
     <Compile Include="../Shared/Wire.cs" />
     <Compile Include="../Shared/RelayServer.cs" />
     <Compile Include="../Shared/WebSocket.cs" />
+    <Compile Include="../Shared/BuildInfo.cs" />
+    <Compile Include="../Shared/Ratings.cs" />
   </ItemGroup>
 </Project>

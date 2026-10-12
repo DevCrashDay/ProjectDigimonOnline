@@ -9,10 +9,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/opt/digimon-netplay/DigimonNetplayServer --port 7777 --name "Digimon Netplay" --behind-proxy
+# Ratings and problem reports live in /var/lib/digimon-netplay (StateDirectory below).
+ExecStart=/opt/digimon-netplay/DigimonNetplayServer --port 7777 --name "Digimon Netplay" --behind-proxy --data-dir /var/lib/digimon-netplay
 Restart=always
 RestartSec=3
 DynamicUser=yes
+StateDirectory=digimon-netplay
 NoNewPrivileges=yes
 
 [Install]

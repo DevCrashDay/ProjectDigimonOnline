@@ -41,7 +41,11 @@ Field("MenuBase", "Audio_Button1", "UnityEngine.AudioClip");
 Field("MenuBase", "Audio_Button2", "UnityEngine.AudioClip");
 Need(types["StageController"].Fields.Any(f => f.Name == "PlayerHealth" && f.FieldType.FullName == "UnityEngine.UI.Image[]"), "StageController.PlayerHealth : Image[]");
 Need(types["StageController"].Fields.Any(f => f.Name == "PlayerEnergy" && f.FieldType.FullName == "UnityEngine.UI.Image[]"), "StageController.PlayerEnergy : Image[]");
+Field("Gameplay", "TEAM_ROUND_VICTORIES", "System.Int32[]");
+Field("Gameplay", "ROUNDS_TO_WIN", "System.Int32");
 var data = types["GameData+Data"];
+foreach (var (f, t) in new[] { ("ItemsEnabled", "System.Boolean"), ("HazardsEnabled", "System.Boolean"), ("BattleRounds", "System.Int32") })
+    Need(data.Fields.Any(x => x.Name == f && x.FieldType.FullName == t), "GameData.Data." + f + " : " + t + " (ranked rules)");
 foreach (var f in new[] { "BattleRounds", "ItemsEnabled", "HazardsEnabled", "TimingIsEnabled", "DamageHandicap", "AllowStageUltraModes", "Difficulty" })
     Need(data.Fields.Any(x => x.Name == f), "GameData.Data." + f);
 Console.WriteLine("form toggles synced: " + string.Join(", ", data.Fields.Where(f => f.FieldType.FullName == "System.Boolean" && f.Name.StartsWith("IsForm") && !f.Name.EndsWith("_Obtained") && !f.Name.EndsWith("_AlreadyUsed")).Select(f => f.Name)));

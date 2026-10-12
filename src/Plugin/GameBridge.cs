@@ -293,6 +293,22 @@ namespace DigimonNetplay
             SceneManager.LoadScene("Menu-Loading");
         }
 
+        /// <summary>The network slot that won the battle that just ended, or -1 (draw, time over, unknown).</summary>
+        public static int ReadWinner(MatchConfig cfg)
+        {
+            var wins = Gameplay.TEAM_ROUND_VICTORIES;
+            int need = Gameplay.ROUNDS_TO_WIN;
+            if (wins == null || need <= 0) return -1;
+            int winner = -1;
+            for (int i = 0; i < cfg.PlayerCount && i < wins.Length; i++)
+            {
+                if (wins[i] < need) continue;
+                if (winner >= 0) return -1;
+                winner = i;
+            }
+            return winner < 0 ? -1 : cfg.Slots[winner];
+        }
+
         // ------------------------------------------------------------------ local input
 
         private static readonly string[] Buttons = { "Attack", "Special", "Jump", "Protect", "Evolve", "Grab", "Crouch", "R", "L" };
